@@ -1,0 +1,57 @@
+"""domains.rl 聚合包。
+
+采用 PEP 562 模块级 ``__getattr__`` 做**惰性导出**。
+
+为什么不用急切 re-export：迁移把多个源顶层包折叠进同一目标目录，急切导入会在包
+初始化期间拉起整条子模块链（含 pydantic 模型定义），与反向依赖本包的模块构成循环
+导入。惰性化后，只有真正访问某个导出名时才会求值。
+
+为什么不用全项目 AST 扫描兜底：扫描式回退会在模块被移动后静默失效，表现为运行期
+``ModuleNotFoundError``，而静态检查完全看不出问题。**显式映射让漏改在导入时立刻暴露。**
+"""
+
+# 惰性导出映射：导出名 -> 定义所在模块
+_LAZY = {
+    "BaseTrainerWrapper": "domains.rl.training.trainer_wrapper",
+    "DetailedLoggingCallback": "domains.rl.training.trainer_wrapper",
+    "GRPOTrainerWrapper": "domains.rl.training.trainer_wrapper",
+    "GSM8KDataset": "domains.rl.dataset.dataset_builder",
+    "MathRewardFunction": "domains.rl.reward.reward_function",
+    "PPOTrainerWrapper": "domains.rl.training.trainer_wrapper",
+    "SFTTrainerWrapper": "domains.rl.training.trainer_wrapper",
+    "TRL_AVAILABLE": "domains.rl.protocol.dependency_probe",
+    "TrainingConfig": "domains.rl.protocol.training_config",
+    "check_trl_installation": "domains.rl.protocol.training_config",
+    "create_accuracy_reward": "domains.rl.reward.reward_function",
+    "create_length_penalty_reward": "domains.rl.reward.reward_function",
+    "create_math_dataset": "domains.rl.dataset.dataset_builder",
+    "create_rl_dataset": "domains.rl.dataset.dataset_builder",
+    "create_sft_dataset": "domains.rl.dataset.dataset_builder",
+    "create_step_reward": "domains.rl.reward.reward_function",
+    "evaluate_rewards": "domains.rl.reward.reward_function",
+    "format_math_dataset": "domains.rl.dataset.dataset_builder",
+    "format_training_time": "domains.rl.protocol.training_config",
+    "get_device_info": "domains.rl.protocol.training_config",
+    "get_installation_guide": "domains.rl.protocol.training_config",
+    "preview_dataset": "domains.rl.dataset.dataset_builder",
+    "print_training_summary": "domains.rl.protocol.training_config",
+    "setup_training_environment": "domains.rl.protocol.training_config",}
+
+
+def __getattr__(name):
+    import importlib
+
+    mod = _LAZY.get(name)
+    if mod is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    value = getattr(importlib.import_module(mod), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LAZY))
+
+
+__all__ = sorted(_LAZY)

@@ -1,0 +1,24 @@
+{
+  "max_tokens": 150000,
+  "model": "Quen3",
+  "stream": false,
+  "tempareture": 0.7,
+  "interactive_mode": "False",
+  "mcp_servers": [],
+  "plugins": {
+    "disabled": [
+      "mcp_tool_gateway"
+    ],
+    "config": {
+        "take_artifact": {
+          "enabled": false
+        }
+    }
+  },
+  "toolDescriptionMaxBytes": 1000,
+  "tool_args_compression_limit": 1,
+  "demo_mode": false,
+  "compressionThreshold": 600,
+  "participant_model_refs": {},
+  "note": "token is null"
+}

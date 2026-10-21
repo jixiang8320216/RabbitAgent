@@ -1,0 +1,72 @@
+"""domains.skill 聚合包。
+
+采用 PEP 562 模块级 ``__getattr__`` 做**惰性导出**。
+
+为什么不用急切 re-export：迁移把多个源顶层包折叠进同一目标目录，急切导入会在包
+初始化期间拉起整条子模块链（含 pydantic 模型定义），与反向依赖本包的模块构成循环
+导入。惰性化后，只有真正访问某个导出名时才会求值。
+
+为什么不用全项目 AST 扫描兜底：扫描式回退会在模块被移动后静默失效，表现为运行期
+``ModuleNotFoundError``，而静态检查完全看不出问题。**显式映射让漏改在导入时立刻暴露。**
+"""
+
+# 惰性导出映射：导出名 -> 定义所在模块
+_LAZY = {
+    "BackgroundReviewConfig": "domains.skill.domain.models",
+    "DEFAULT_SEARCH_DIRS": "domains.skill.service.skill_registry",
+    "FileLifecycleCounterStore": "domains.skill.infrastructure.scheduling.file_lifecycle_counter_store",
+    "HarnessLifecycleNotifier": "domains.skill.infrastructure.lifecycle.notifier",
+    "HeartbeatHandler": "domains.skill.application.lifecycle_dispatcher",
+    "HermesGatewayService": "domains.skill.infrastructure.gateway.hermes_gateway",
+    "IdleGate": "domains.skill.application.idle_gate",
+    "LifecyceBackgroundSubmitter": "domains.skill.infrastructure.events.lifecycle_observer",
+    "LifecycleCounterStore": "domains.skill.application.lifecycle_counter_ports",
+    "LifecycleCounters": "domains.skill.application.lifecycle_dispatcher",
+    "LifecycleDispatchResult": "domains.skill.domain.lifecycycle_protection",
+    "LifecycleDispatchStatus": "domains.skill.domain.lifecycycle_protection",
+    "LifecycleNotifierProtocol": "domains.skill.infrastructure.lifecycle.notifier",
+    "LifecycleObserver": "domains.skill.infrastructure.events.lifecycle_observer",
+    "LifecycleOperation": "domains.skill.infrastructure.lifecycle.notifier",
+    "LifecycleOutcomeStatus": "domains.skill.domain.lifecycycle_protection",
+    "MAX_SKILL_COUNT": "domains.skill.service.skill_registry",
+    "MAX_SKILL_FILE_BYTES": "domains.skill.service.skill_registry",
+    "NoOpObserver": "domains.skill.infrastructure.events.lifecycle_observer",
+    "ParsedSkillPackage": "domains.skill.application.skill_package_parser",
+    "Protocol": "domains.skill.application.lifecycle_counter_ports",
+    "SIDE_EFFECT_CATEGORIES": "domains.skill.application.skill_package_parser",
+    "SKILL_MANIFEST_NAMES": "domains.skill.service.skill_registry",
+    "SKillEvolutionModel": "domains.skill.domain.models",
+    "SUPPORTED_PARAMETER_TYPES": "domains.skill.application.skill_package_parser",
+    "SelfEvolutionHeartbeatRequest": "domains.skill.domain.heartbeat",
+    "SelfEvolutionLifecycleDispatcher": "domains.skill.application.lifecycle_dispatcher",
+    "SelfEvolutionRun": "domains.skill.domain.runs",
+    "SideEffect": "domains.skill.application.skill_package_parser",
+    "SkillPackage": "domains.skill.service.skill_registry",
+    "SkillPackageParseError": "domains.skill.application.skill_package_parser",
+    "SkillParameter": "domains.skill.application.skill_package_parser",
+    "SkillRegistry": "domains.skill.service.skill_registry",
+    "SkillRegistryRefresher": "domains.skill.service.skill_registry",
+    "build_and_install_lifecycle_notifier": "domains.skill.infrastructure.lifecycle.composition",
+    "build_lifecycle_dispatcher": "domains.skill.infrastructure.lifecycle.dispatcher_factory",
+    "instll_lifecycle_notifier": "domains.skill.infrastructure.lifecycle.notifier",
+    "parse_skill_package": "domains.skill.application.skill_package_parser",
+    "project_lifecycle_outcome": "domains.skill.application.lifecycle_status_projection",}
+
+
+def __getattr__(name):
+    import importlib
+
+    mod = _LAZY.get(name)
+    if mod is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    value = getattr(importlib.import_module(mod), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_LAZY))
+
+
+__all__ = sorted(_LAZY)

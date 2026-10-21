@@ -1,0 +1,57 @@
+requests>=2.25.0,<3.0.0
+python-dotenv>=0.19.0,<2.0.0
+pydantic>=2.0.0,<3.0.0
+beautifulsoup4>=4.9.0,<5.0.0
+numpy>=2.0.0,<3.0.0
+networkx>=2.6.0,<4.0.0
+tiktoken>=0.5.0
+rich==15.0.0
+
+# TUI dependencies
+textual>=0.40.0
+prompt_toolkit>=3.0.0
+
+# Optional / dev
+pytest>=7.0
+
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-exporter-otlp-proto-grpc>=1.20.0
+opentelemetry-exporter-otlp-proto-http>=1.20.0
+
+anthropic>=0.40
+openai>=1.0.0,<2.0.0
+
+# ==== 模块级硬依赖（缺任一项则 import 即失败）====
+# shortuuid: domains/agent/domain/value_objects/message.py、domains/plan/domain/execution_plan.py
+shortuuid>=1.0.13
+# dashscope: domains/plugin/domain/contribution.py（ToolDefinition）
+dashscope>=1.27.0
+# fsspec: domains/persistence/infrastructure/file/_types.py（atomic_write）
+fsspec>=2024.6.0
+# transformers: domains/llm/provider/application/message_formatters.py（MultiModalData）
+transformers>=4.57.0
+# datasets: domains/rl/datasets.py
+datasets>=2.20.0
+# fastmcp: domains/protocol/mcp/client.py、server.py
+fastmcp>=2.0.0
+# huggingface_hub: domains/evaluation/benchmarks/data_generation/dataset.py
+huggingface-hub>=0.25.0
+
+# ==== 可选依赖（代码内已做 try/except 降级，按需安装）====
+# 搜索工具：domains/tool/builtin/search_tool.py
+ddgs>=9.0.0
+markdownify>=0.13.0
+tavily-python>=0.5.0
+serpapi>=1.0.0
+# 记忆/向量化：domains/memory/*
+qdrant-client>=1.12.0
+neo4j>=5.20.0
+Pillow>=10.0.0
+scikit-learn>=1.5.0
+# RAG 文档解析：domains/memory/rag/pipeline.py
+markitdown>=0.1.0
+langdetect>=1.0.9
+# A2A 协议服务：domains/protocol/a2a/implementation.py
+a2a-sdk>=0.2.0
+Flask>=3.0.0

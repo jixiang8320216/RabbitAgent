@@ -1,0 +1,4 @@
+
+
+ERROR_COLOR="red"
+SUCCESS_COLOR="green"
