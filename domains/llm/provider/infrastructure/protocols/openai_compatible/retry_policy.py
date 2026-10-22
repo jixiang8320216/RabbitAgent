@@ -2,6 +2,7 @@
 import domains.llm.provider.infrastructure.protocols.openai_compatible.chat_model as native_openai_chat_model
 import domains.llm.provider.application.authentication.request_attestation as provider_request_attestation
 from domains.llm.provider.infrastructure.foundation.chat_transport import failure_classification
+import collections.abc
 import collections.abc as abc
 import domains.llm.provider.infrastructure.protocols.openai_compatible.projections as native_transport
 import domains.agent.domain.aggregates.runtime_observer as callbacks
@@ -20,7 +21,7 @@ class NativeOpenAIChatModel(native_openai_chat_model.NativeOpenAiChatModel):
         chunk_idle_timeout: int = 180,
         stream: bool = True,
         ssl_verify: bool = False,
-        default_headers: abc.Mapping[str, str] | None = None,
+        default_headers: collections.abc.Mapping[str, str] | None = None,
         auth_hook: native_transport.AuthHook| None = None,
         model_identity_resolver: native_transport.ModelIdentityResolver | None = None,
         request_attestor: provider_request_attestation.ProviderRequestAttestorProtocol | None = None,

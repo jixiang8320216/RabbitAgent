@@ -55,3 +55,13 @@ langdetect>=1.0.9
 # A2A 协议服务：domains/protocol/a2a/implementation.py
 a2a-sdk>=0.2.0
 Flask>=3.0.0
+
+# ---- 可选依赖（缺失时对应能力静默降级，不影响主链路启动）----
+# 计费/预算定价表：domains/billing/domain/litellm_budget.py
+# 未安装时 estimate_cost 返回 None，BudgetTracker 只累计条数不累计金额
+litellm>=1.40.0
+# MCP 服务端：domains/protocol/mcp/server.py（未安装 fastmcp 时该模块不可导入）
+fastmcp>=2.0.0
+# RL 数据集构建：domains/rl/dataset/dataset_builder.py
+datasets>=2.19.0
+

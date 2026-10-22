@@ -82,37 +82,59 @@ class PerceptualMemory(BaseMemory):
         self.vector_dim = get_dimension(getattr(self.text_embedder, 'dimension', 384))
 
         # 可选加载：图像CLIP与音频CLAP（缺依赖则优雅降级为哈希编码）
+        #
+        # 说明：``from_pretrained`` 在**离线环境**会反复重试网络请求
+        # （HuggingFace SDK 默认重试 5 次、每次递增等待），表现为「感知记忆
+        # 初始化卡住几十秒」。这里支持通过环境变量直接关闭多模态模型加载：
+        #   PERCEPTUAL_DISABLE_CLIP=1 / PERCEPTUAL_DISABLE_CLAP=1
+        # 关闭后统一走确定性哈希编码，检索能力不受影响（只是不做跨模态对齐）。
         self._clip_model = None
         self._clip_processor = None
         self._clap_model = None
         self._clap_processor = None
         self._image_dim = None
         self._audio_dim = None
-        try:
-            from transformers import CLIPModel, CLIPProcessor
-            clip_name = os.getenv("CLIP_MODEL", "openai/clip-vit-base-patch32")
-            self._clip_model = CLIPModel.from_pretrained(clip_name)
-            self._clip_processor = CLIPProcessor.from_pretrained(clip_name)
-            # 估计输出维度
-            self._image_dim = self._clip_model.config.projection_dim if hasattr(self._clip_model.config,
-                                                                                'projection_dim') else 512
-        except Exception:
-            self._clip_model = None
-            self._clip_processor = None
+
+        disable_clip = os.getenv("PERCEPTUAL_DISABLE_CLIP", "").strip() in ("1", "true", "yes")
+        disable_clap = os.getenv("PERCEPTUAL_DISABLE_CLAP", "").strip() in ("1", "true", "yes")
+
+        if not disable_clip:
+            try:
+                from transformers import CLIPModel, CLIPProcessor
+                clip_name = os.getenv("CLIP_MODEL", "openai/clip-vit-base-patch32")
+                self._clip_model = CLIPModel.from_pretrained(clip_name)
+                self._clip_processor = CLIPProcessor.from_pretrained(clip_name)
+                # 估计输出维度
+                self._image_dim = self._clip_model.config.projection_dim if hasattr(self._clip_model.config,
+                                                                                    'projection_dim') else 512
+            except Exception:
+                self._clip_model = None
+                self._clip_processor = None
+                self._image_dim = self.vector_dim
+        else:
+            logger.info("已按配置禁用 CLIP，图像编码走确定性哈希路径")
             self._image_dim = self.vector_dim
-        try:
-            from transformers import ClapProcessor, ClapModel
-            clap_name = os.getenv("CLAP_MODEL", "laion/clap-htsat-unfused")
-            self._clap_model = ClapModel.from_pretrained(clap_name)
-            self._clap_processor = ClapProcessor.from_pretrained(clap_name)
-            # 估计输出维度
-            self._audio_dim = getattr(self._clap_model.config, 'projection_dim', None) or 512
-        except Exception:
-            self._clap_model = None
-            self._clap_processor = None
+
+        if not disable_clap:
+            try:
+                from transformers import ClapProcessor, ClapModel
+                clap_name = os.getenv("CLAP_MODEL", "laion/clap-htsat-unfused")
+                self._clap_model = ClapModel.from_pretrained(clap_name)
+                self._clap_processor = ClapProcessor.from_pretrained(clap_name)
+                # 估计输出维度
+                self._audio_dim = getattr(self._clap_model.config, 'projection_dim', None) or 512
+            except Exception:
+                self._clap_model = None
+                self._clap_processor = None
+                self._audio_dim = self.vector_dim
+        else:
+            logger.info("已按配置禁用 CLAP，音频编码走确定性哈希路径")
             self._audio_dim = self.vector_dim
 
         # 向量存储（Qdrant）— 按模态拆分集合，避免维度冲突，使用连接管理器避免重复连接
+        # 降级说明：Qdrant 是可选加速层，SQLite 才是权威存储。
+        # 原实现在 Qdrant 不可用时直接抛错，整个感知记忆不可用；
+        # 现在降级为「无向量库模式」，检索回落到 SQLite 结构化过滤 + 关键词兜底。
         from ..storage.qdrant_store import QdrantConnectionManager
         qdrant_url = os.getenv("QDRANT_URL")
         qdrant_api_key = os.getenv("QDRANT_API_KEY")
@@ -121,29 +143,42 @@ class PerceptualMemory(BaseMemory):
 
         self.vector_stores: Dict[str, QdrantVectorStore] = {}
         # 文本集合
-        self.vector_stores["text"] = QdrantConnectionManager.get_instance(
-            url=qdrant_url,
-            api_key=qdrant_api_key,
-            collection_name=f"{base_collection}_perceptual_text",
-            vector_size=self.vector_dim,
-            distance=distance
-        )
+        try:
+            self.vector_stores["text"] = QdrantConnectionManager.get_instance(
+                url=qdrant_url,
+                api_key=qdrant_api_key,
+                collection_name=f"{base_collection}_perceptual_text",
+                vector_size=self.vector_dim,
+                distance=distance
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Qdrant(text) 不可用（{e}）")
         # 图像集合（若CLIP不可用，维度退化为text维度）
-        self.vector_stores["image"] = QdrantConnectionManager.get_instance(
-            url=qdrant_url,
-            api_key=qdrant_api_key,
-            collection_name=f"{base_collection}_perceptual_image",
-            vector_size=int(self._image_dim or self.vector_dim),
-            distance=distance
-        )
+        try:
+            self.vector_stores["image"] = QdrantConnectionManager.get_instance(
+                url=qdrant_url,
+                api_key=qdrant_api_key,
+                collection_name=f"{base_collection}_perceptual_image",
+                vector_size=int(self._image_dim or self.vector_dim),
+                distance=distance
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Qdrant(image) 不可用（{e}）")
         # 音频集合（若CLAP不可用，维度退化为text维度）
-        self.vector_stores["audio"] = QdrantConnectionManager.get_instance(
-            url=qdrant_url,
-            api_key=qdrant_api_key,
-            collection_name=f"{base_collection}_perceptual_audio",
-            vector_size=int(self._audio_dim or self.vector_dim),
-            distance=distance
-        )
+        try:
+            self.vector_stores["audio"] = QdrantConnectionManager.get_instance(
+                url=qdrant_url,
+                api_key=qdrant_api_key,
+                collection_name=f"{base_collection}_perceptual_audio",
+                vector_size=int(self._audio_dim or self.vector_dim),
+                distance=distance
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Qdrant(audio) 不可用（{e}）")
+
+        if not self.vector_stores:
+            logger.warning("⚠️ 全部向量集合不可用，感知记忆以降级模式运行："
+                           "SQLite 权威存储正常，检索回落到结构化过滤 + 关键词匹配")
 
         # 编码器（轻量实现；真实场景可替换为CLIP/CLAP等）
         self.encoders = self._init_encoders()
@@ -191,6 +226,8 @@ class PerceptualMemory(BaseMemory):
         try:
             vector = perception.encoding
             store = self._get_vector_store_for_modality(modality)
+            if store is None:
+                raise RuntimeError("向量库不可用（降级模式）")
             store.add_vectors(
                 vectors=[vector],
                 metadata=[{
@@ -223,6 +260,8 @@ class PerceptualMemory(BaseMemory):
             if target_modality:
                 where["modality"] = target_modality
             store = self._get_vector_store_for_modality(target_modality or query_modality)
+            if store is None:
+                raise RuntimeError("向量库不可用（降级模式）")
             hits = store.search_similar(
                 query_vector=qvec,
                 limit=max(limit * 5, 20),
@@ -327,7 +366,14 @@ class PerceptualMemory(BaseMemory):
             try:
                 perception = self._encode_perception(raw or "", modality, memory_id)
                 payload = self.doc_store.get_memory(memory_id) or {}
-                self.vector_store.add_vectors(
+                # 原写作 ``self.vector_store.add_vectors(...)`` —— PerceptualMemory
+                # 没有 ``vector_store`` 属性（它按模态拆成了 ``vector_stores`` 字典），
+                # 会抛 AttributeError 并被下面的 except 静默吞掉，导致「更新后
+                # 向量索引没同步」这种静默失效。这里按模态取对应集合。
+                store = self._get_vector_store_for_modality(modality)
+                if store is None:
+                    raise RuntimeError("向量库不可用（降级模式）")
+                store.add_vectors(
                     vectors=[perception.encoding],
                     metadata=[{
                         "memory_id": memory_id,
@@ -700,9 +746,13 @@ class PerceptualMemory(BaseMemory):
             except Exception:
                 pass
 
-    def _get_vector_store_for_modality(self, modality: Optional[str]) -> QdrantVectorStore:
+    def _get_vector_store_for_modality(self, modality: Optional[str]) -> Optional[QdrantVectorStore]:
+        """按模态取向量集合；无可用集合时返回 None（降级模式）。"""
         mod = (modality or "text").lower()
-        return self.vector_stores.get(mod, self.vector_stores["text"])
+        store = self.vector_stores.get(mod)
+        if store is None:
+            store = self.vector_stores.get("text")
+        return store
 
     def _get_dim_for_modality(self, modality: Optional[str]) -> int:
         mod = (modality or "text").lower()

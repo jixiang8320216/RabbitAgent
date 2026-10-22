@@ -1,4 +1,5 @@
 import typing
+import collections.abc
 import collections.abc as abc
 
 import domains.llm.provider.infrastructure.families.anthropic.contracts as native_transport
@@ -6,7 +7,7 @@ import domains.agent.domain.aggregates.runtime_observer as runtime_observer
 import domains.agent.domain.aggregates.chat_model as chat_model
 import domains.agent.domain.value_objects.chat_response as chat_contracts
 
-InterruptibleSleep = abc.Callable[[float, str],abc.Awaitable[None]]
+InterruptibleSleep = collections.abc.Callable[[float, str],abc.Awaitable[None]]
 
 class AnthropicMessagesPort(typing.Protocol):
     create: native_transport._AsyncProviderCall

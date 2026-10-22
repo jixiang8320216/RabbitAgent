@@ -1,26 +1,18 @@
+"""ACP 协议层的 schema 定义。
 
-from pydantic import BaseModel,Field
-from typing import Optional,Annotated,Dict,Any
+``ModelInfo`` / ``SessionMode`` 的定义本体已经下沉到配置域
+（:mod:`domains.configuration.domain.model.runtime_descriptors`），这里只做
+re-export。这样做的原因与收益见那边的模块文档，核心是**把依赖方向摆正**：
+协议层可以认识业务模型，业务模型不该认识协议层。
 
+两处写法都不变：本模块对外的名字一个都没改，既有
+``from interfaces.acp.schema import SessionMode`` 的写法继续可用，
+并且拿到的**是同一个类**。
+"""
 
-class ModelInfo(BaseModel):
-    model_config = {
-        "populate_by_name": True,
-    }
+from domains.configuration.domain.model.runtime_descriptors import (
+    ModelInfo,
+    SessionMode,
+)
 
-    field_meta:Annotated[
-        Optional[Dict[str,Any]],
-        Field(
-            alias="_meta",
-            description="The meta information of the model",
-        ),
-    ]=None
-    description:Annotated[Optional[str],Field(description="Optional description of the model." )]= None
-    model_id : Annotated[str,Field( alias="modelId",description="Unique identifier of the model." )]
-    name:Annotated[str,Field(description="Unique identifier of the model." )]
-
-
-class SessionMode(BaseModel):
-    id: str
-    name: str
-    description: Optional[str] = None
+__all__ = ["ModelInfo", "SessionMode"]

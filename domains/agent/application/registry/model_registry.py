@@ -17,14 +17,62 @@ from __future__ import annotations
 import collections.abc
 import logging
 import threading
+import typing
 
+import pydantic
 
 import domains.plugin.domain as plugin_domain
 import domains.agent.domain.entities.model_registration as model_registration
 
 logger = logging.getLogger(__name__)
 
-RegisteredMode=model_registration.RegisteredMode
+class RegisteredMode(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(
+        arbitrary_types_allowed = True,
+        extra = "forbid",
+        frozen=True,
+        strict = True
+    )
+    declaration: pydantic.InstanceOf[plugin_domain.ModeDeclaration]
+    builder_override : collections.abc.Callable[...,object]|None=None
+    source: str
+
+    @property
+    def name(self) -> str:
+        """模式名称（取自声明），便于调用方无需深入 ``declaration`` 即可取用。"""
+        return self.declaration.name
+
+    def __getattr__(self, item: str) -> typing.Any:
+        """把本模型上未定义的属性转发给被包装的模式声明。
+
+        ``ModelRegistry.get()`` 返回的是 ``RegisteredMode`` 包装对象，但全库消费点
+        都按 ``ModeDeclaration`` **直接**使用它：
+
+        - ``AgentOrchestrator._interpret_mode``：``mode_decl.agent_slots`` /
+          ``mode_decl.root_agent``
+        - ``AgentOrchestrator._resolve_skill_agent_slot``：
+          ``registered_mode.default_contribution_policy``
+        - ``RootAgentLoader._root_slot``：``declaration.agent_slots``
+        - ``GroupchatAgentBuilder._active_declaration``：整体当作声明返回
+
+        此前两边契约不一致：包装对象上没有这些属性 → ``AttributeError:
+        'RegisteredMode' object has no attribute 'agent_slots'``，
+        TUI 启动即崩（``main.py`` → ``_create_agents`` → ``_build_root_agent_for_mode``）。
+
+        在包装层做一次属性转发，使「包装对象」与「声明本身」两种用法都成立，
+        且不影响 ``.name`` / ``.declaration`` 等自有属性。
+        """
+        # pydantic 模型字段存放在 __dict__；直接取，避免再次触发 __getattr__ 造成递归。
+        declaration = self.__dict__.get("declaration")
+        if declaration is not None:
+            try:
+                return getattr(declaration, item)
+            except AttributeError:
+                pass
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {item!r}"
+        )
+
 
 __all__ = ["ModelRegistry"]
 
@@ -89,27 +137,54 @@ class ModelRegistry:
         """按名字取模式声明；不存在返回 ``None``。"""
         with self._lock:
             stack= self._mode_stacks.get(mode_name)
-            # 返回 ``ModeDeclaration`` 而非 ``RegisteredMode``：注册表对外的契约是
-            # ``get()``/``resolve()`` 直接给出模式声明（与 ``available_modes()``
-            # 一致，且 ``root_agent_loader``、``agent_orchestrator._build_root_agent``
-            # 等调用方均按 ``ModeDeclaration`` 直接使用，不期望 ``.declaration`` 包装）。
-            return stack[-1].declaration.model_copy(deep=True) if stack else None
+            return stack[-1] if stack else None
 
-
-    def available_modes(self)->list[plugin_domain.ModeDeclaration]:
+    def get_shadows(self, mode_name: str) -> list[RegisteredMode]:
+        """按名字取模式声明；不存在返回 ``None``。"""
         with self._lock:
-            return [stack[-1].declaration.model_copy(deep=True) for stack in self._mode_stacks.values() if stack]
+            stack = self._mode_stacks.get(mode_name,[])
+            return list(stack[-1])
 
-
-    def unregister(self, mode_name: str) -> bool:
+    def available_modes(self) -> list[str]:
+        """返回当前可用模式的名称列表（去重，按注册顺序）。"""
         with self._lock:
-            stack = self._mode_stacks.get(mode_name)
-            if not stack:
-                return False
-            stack.pop()
-            if not stack:
-                self._mode_stacks.pop(mode_name,None)
-            return True
+            return list(self._mode_stacks.keys())
+
+    def available_mode_descriptors(self) -> list[plugin_domain.ModeDeclaration]:
+        """返回当前可用模式的声明列表。
+
+        ``AgentOrchestrator._build_root_agent_for_mode`` 在「模式查不到」的错误
+        分支里用它列出可用模式清单——此前该方法在 ``ModelRegistry`` 上并不存在，
+        一旦走到那个分支就会二次抛 ``AttributeError``，把原始错误掩盖掉。
+        """
+        with self._lock:
+            return [
+                item.declaration
+                for stack in self._mode_stacks.values()
+                for item in stack
+            ]
+
+    def source_count(self)->dict[str,int]:
+        with self._lock:
+            counts:dict[str,int]= {}
+            for stack in self._mode_stacks.values():
+                for item in stack:
+                    counts[item.source] =counts.get(item.source,0)+1
+        return counts
+
+
+    def unregister_by_source(self, source: str) -> bool:
+        with self._lock:
+            next_stacks= dict[str,list[RegisteredMode]]={}
+            removed: list[str]=[]
+            for mode_name, stack in self._mode_stacks.items():
+                filtered= [item for item in stack if item.source != source]
+                if len(filtered) !=len(stack):
+                    removed.append(mode_name)
+                if filtered:
+                    next_stacks[mode_name]=filtered
+            self._mode_stacks= next_stacks
+            return removed
 
     def __len__(self) -> int:
         with self._lock:
@@ -118,17 +193,4 @@ class ModelRegistry:
     def __repr__(self,mode_name:str) -> bool:
         with self._lock:
             return bool(self._mode_stacks.get(mode_name))
-
-    def available_mode_descriptors(self)->tuple[model_registration.AvailableModeDescriptor, ...]:
-        with self._lock:
-            active=[stack[-1] for stack in self._mode_stacks.values() if stack]
-        return tuple(
-            model_registration.AvailableModeDescriptor(
-                value=registration.declaration.name,
-                label=registration.declaration.label,
-                description= registration.declaration.description,
-                source= registration.source,
-            )
-            for registration in active
-        )
 

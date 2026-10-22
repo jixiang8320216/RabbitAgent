@@ -26,6 +26,7 @@ import domains.agent.domain.value_objects.conversation_context as conversation_c
 import domains.agent.domain.entities.input_overflow_result as input_overflow_result_module
 import domains.observability.application.tracking as tracking
 import domains.observability.application.telemetry_policy_state as telemetry_configuration
+import domains.context.application.history_compression as history_compression_module
 import domains.agent.domain.aggregates.react_agent as react_agent_module
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,70 @@ class SessionTurnExecutor:
         self._last_completion_witness: turn_completion_module.TurnCompletionWitness | None = None
         # 已回执过的异步投递 id：重试/重入路径下避免重复确认。
         self._acked_delivery_ids: set[str] = set()
+        # 历史消息自动压缩的执行者（``compressionThreshold`` 终于有了消费方）。
+        # 惰性创建：构造阶段就去读配置会在某些装配顺序下取到未就绪的 config。
+        self._history_compression: history_compression_module.HistoryCompressionService | None = None
+
+    @property
+    def history_compression(self) -> history_compression_module.HistoryCompressionService:
+        """历史压缩执行者（首次访问时按配置创建）。"""
+        if self._history_compression is None:
+            self._history_compression = self._build_history_compression()
+        return self._history_compression
+
+    def _build_history_compression(self) -> history_compression_module.HistoryCompressionService:
+        """按配置新建执行者。
+
+        阈值取配置的 ``compressionThreshold``（缺省 600）。摘要器按配置装配成本
+        高、且依赖外部模型，这里**不主动创建**：由宿主通过
+        :meth:`install_history_compression` 注入；没有注入时自动走规则式压缩，
+        链路不会断。
+        """
+        threshold = history_compression_module.DEFAULT_COMPRESSION_THRESHOLD
+        try:
+            manager = getattr(getattr(self.app, "config_manager", None), "get_property", None)
+            if callable(manager):
+                configured = manager("compressionThreshold", threshold)
+                if isinstance(configured, int) and configured > 0:
+                    threshold = configured
+                elif isinstance(configured, str) and configured.strip().isdigit():
+                    threshold = int(configured.strip())
+        except Exception:
+            logger.debug("compressionThreshold unavailable, using default", exc_info=True)
+        return history_compression_module.HistoryCompressionService(threshold=threshold)
+
+    def install_history_compression(
+            self,
+            service: history_compression_module.HistoryCompressionService,
+    ) -> None:
+        """注入外部配置好的压缩执行者（例如带摘要模型的实例）。"""
+        self._history_compression = service
+
+    async def _maybe_compress_history(self, entry_agent: react_agent.ReActAgent, *, turn_id: str) -> None:
+        """入口 agent 调用前按需压缩历史。
+
+        为什么放在这里：**每一轮进入 LLM 之前**是唯一同时满足「能看到完整历史」
+        与「改了立即生效」的时机。压缩失败不影响本轮进行。
+        """
+        context = getattr(entry_agent, "context", None)
+        if context is None:
+            return
+        try:
+            report = await self.history_compression.maybe_compress(
+                context,
+                agent_id=str(getattr(entry_agent, "name", "") or ""),
+                metadata={"turn_id": str(turn_id)},
+            )
+        except Exception:
+            logger.debug("history compression skipped", exc_info=True)
+            return
+        if report.performed:
+            logger.info(
+                "history compressed before turn: agent=%s %d->%d msgs, tokens %d->%d (%s)",
+                getattr(entry_agent, "name", "-"),
+                report.messages_before, report.messages_after,
+                report.tokens_before, report.tokens_after, report.strategy,
+            )
 
 
     def  _register_turn_scope(
@@ -178,6 +243,8 @@ class SessionTurnExecutor:
             )
 
             self._start_query_tracking(user_msg,session_id)
+            # 上下文超阈值时先压缩历史（compressionThreshold 的执行者）
+            await self._maybe_compress_history(entry_agent, turn_id=turn_id)
             #调用 agent
             response= await self._invoke_agent(
                 entry_agent=entry_agent,

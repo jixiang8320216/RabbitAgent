@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict,Optional
 import logging
-from domains.configuration.domain.protocol.project_layout import project_layout
+from domains.configuration.domain.protocol.project_layout_impl import project_layout
 from domains.configuration import get_user_config_dir
 
 logger = logging.getLogger(__name__)

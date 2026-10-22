@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import typing
+import collections.abc
 import collections.abc as abc
 import httpx
 import pydantic
@@ -202,9 +203,9 @@ def _value_texts(value:object) -> list[str]:
         return [value]
     if isinstance(value, bytes):
         return[value.decode("utf-8", errors="replace")]
-    if isinstance(value, abc.Mapping):
+    if isinstance(value, collections.abc.Mapping):
         return [text for key, item in value.items() for text in (*_value_texts(key), *_value_texts(item))]
-    if isinstance(value, abc.Iterable):
+    if isinstance(value, collections.abc.Iterable):
         return [text for item in value for text in _value_texts(item)]
     return [str(value)]
 

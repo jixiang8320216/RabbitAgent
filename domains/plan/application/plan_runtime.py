@@ -1,4 +1,6 @@
 
+from __future__ import annotations
+
 import domains.plan.domain.execution_plan as execution_plan
 import collections
 import typing

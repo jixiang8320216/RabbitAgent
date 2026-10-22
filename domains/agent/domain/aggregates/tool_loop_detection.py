@@ -133,7 +133,7 @@ class ToolLoopDetector:
         normalized= cls._normalize(value if value is not None else {})
         return json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     @classmethod
-    def _normalize(cls, value:object)-> pydantic.JsonObject:
+    def _normalize(cls, value:object)-> pydantic.JsonValue:
         if isinstance(value, typing.Mapping):
             return {str(key): cls._normalize(value[key]) for key in sorted(value.keys(),key=lambda item: str(item))}
         if isinstance(value, list):

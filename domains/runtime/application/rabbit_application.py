@@ -433,7 +433,7 @@ class RabbitApplication(rabbit_application_composition.RabbitApplicationComposit
         except Exception:
             logger.warning("dispose_hook_resources failed", exc_info=True)
         try:
-            await self.plugin_manager.shutdown_plugins(timeout=timeout_seconds)
+            await self.plugin_manager.shutdown_plugins(timeout_seconds=timeout_seconds)
         except Exception:
             logger.warning("dispose_hook_resources failed", exc_info=True)
         lifecycle = self.hook_lifecycle

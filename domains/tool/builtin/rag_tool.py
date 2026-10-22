@@ -131,6 +131,45 @@ class RAGTool(Tool):
                 required=True
             ),
 
+            ToolParameter(
+                name="stage_mode",
+                type="string",
+                description=(
+                    "检索形态：three_stage(默认，召回→重排→压缩三段全开)、"
+                    "expanded(仅查询扩展+召回)、basic(纯向量召回)"
+                ),
+                required=False,
+                default="three_stage"
+            ),
+            ToolParameter(
+                name="enable_rerank",
+                type="boolean",
+                description="是否启用二段重排（交叉编码器；模型不可用时回落图信号融合，默认：true）",
+                required=False,
+                default=True
+            ),
+            ToolParameter(
+                name="enable_neighbor_expand",
+                type="boolean",
+                description="是否对命中片段做邻接片段扩展（默认：true）",
+                required=False,
+                default=True
+            ),
+            ToolParameter(
+                name="enable_compression",
+                type="boolean",
+                description="是否合并同源相邻片段并按每文档上限裁剪（默认：true）",
+                required=False,
+                default=True
+            ),
+            ToolParameter(
+                name="enable_tldr",
+                type="boolean",
+                description="是否在上下文末尾附 TL;DR 要点摘要（额外一次 LLM 调用，默认：false）",
+                required=False,
+                default=False
+            ),
+
             # 内容参数
             ToolParameter(
                 name="file_path",
@@ -227,7 +266,13 @@ class RAGTool(Tool):
             "max_chars": 1200,
             "min_score": 0.1,
             "chunk_size": 800,
-            "chunk_overlap": 100
+            "chunk_overlap": 100,
+            # --- 三段式检索开关 ---
+            "stage_mode": "three_stage",
+            "enable_rerank": None,
+            "enable_neighbor_expand": None,
+            "enable_compression": None,
+            "enable_tldr": None,
         }
 
         for key, value in defaults.items():
@@ -326,31 +371,102 @@ class RAGTool(Tool):
         except Exception as e:
             return f"❌ 添加文本失败: {str(e)}"
 
+    def _stage_overrides(self, **kwargs) -> Dict[str, Any]:
+        """把工具层的开关翻译给 ``search_three_stage``。
+
+        ``stage_mode`` 是一组预设（方便调用方一句话切形态），单个 ``enable_*``
+        则在预设之上做**逐段覆盖**；两者都不给时才用默认形态。这样「同一份调用
+        只关掉重排」这种对比实验不用改代码。
+        """
+        presets: Dict[str, Dict[str, bool]] = {
+            "three_stage": {
+                "enable_query_expansion": True,
+                "enable_rerank": True,
+                "enable_neighbor_expand": True,
+                "enable_compression": True,
+            },
+            "expanded": {
+                "enable_query_expansion": True,
+                "enable_rerank": False,
+                "enable_neighbor_expand": False,
+                "enable_compression": False,
+            },
+            "basic": {
+                "enable_query_expansion": False,
+                "enable_rerank": False,
+                "enable_neighbor_expand": False,
+                "enable_compression": False,
+            },
+        }
+        stage_mode = str(kwargs.get("stage_mode") or "three_stage").strip().lower()
+        overrides = dict(presets.get(stage_mode, presets["three_stage"]))
+
+        # 查询扩展是否走 LLM 由 enable_advanced_search 决定（保留旧语义）
+        overrides["enable_mqe"] = bool(kwargs.get("enable_advanced_search"))
+        overrides["enable_hyde"] = bool(kwargs.get("enable_advanced_search"))
+        if not overrides.get("enable_query_expansion"):
+            overrides["enable_mqe"] = False
+            overrides["enable_hyde"] = False
+
+        overrides["max_chars"] = int(kwargs.get("max_chars") or 1200)
+        overrides["include_citations"] = bool(kwargs.get("include_citations"))
+
+        # 单段开关显式给出时覆盖预设
+        for key in ("enable_rerank", "enable_neighbor_expand", "enable_compression", "enable_tldr"):
+            value = kwargs.get(key)
+            if value is not None:
+                overrides[key] = bool(value)
+        return overrides
+
+    def _retrieve(self, query: str, **kwargs) -> Dict[str, Any]:
+        """统一检索入口，返回 ``{"hits", "context", "citations", "report"}``。
+
+        此前 ``_search`` / ``_ask`` 各自直连 ``search_advanced``，链路只到
+        「查询扩展 + 向量召回」；这里改为统一走三段式，两条入口拿到的是同一份
+        重排与压缩结果，不会一个带引用一个不带。
+        """
+        pipeline = self._get_pipeline(kwargs.get("namespace"))
+        top_k = int(kwargs.get("limit") or 5)
+        min_score = kwargs.get("min_score")
+        if str(kwargs.get("stage_mode") or "three_stage").strip().lower() == "basic":
+            hits = pipeline["search"](
+                query=query,
+                top_k=top_k,
+                score_threshold=min_score if isinstance(min_score, (int, float)) and min_score > 0 else None,
+            )
+            return {"hits": hits, "context": "", "citations": [], "report": {"stage_mode": "basic"}}
+
+        result = pipeline["search_full"](
+            query=query,
+            top_k=top_k,
+            score_threshold=min_score if isinstance(min_score, (int, float)) and min_score > 0 else None,
+            **self._stage_overrides(**kwargs),
+        )
+        result["report"]["stage_mode"] = str(kwargs.get("stage_mode") or "three_stage")
+        return result
+
     def _search(self, query: str, limit: int = 5, min_score: float = 0.1, enable_advanced_search: bool = True,
                 max_chars: int = 1200, include_citations: bool = True, namespace: Optional[str] = None,
                 **kwargs) -> str:
-        """搜索知识库"""
+        """搜索知识库（三段式：召回 -> 重排 -> 压缩）"""
         try:
             if not query or not query.strip():
                 return "❌ 搜索查询不能为空"
 
-            # 使用统一 RAG 管道搜索
-            pipeline = self._get_pipeline(namespace)
-
-            if enable_advanced_search:
-                results = pipeline["search_advanced"](
-                    query=query,
-                    top_k=limit,
-                    enable_mqe=True,
-                    enable_hyde=True,
-                    score_threshold=min_score if min_score > 0 else None
-                )
-            else:
-                results = pipeline["search"](
-                    query=query,
-                    top_k=limit,
-                    score_threshold=min_score if min_score > 0 else None
-                )
+            # 统一走三段式检索（basic 形态时只做纯向量召回）
+            retrieval = self._retrieve(
+                query=query,
+                limit=limit,
+                min_score=min_score,
+                namespace=namespace,
+                enable_advanced_search=enable_advanced_search,
+                max_chars=max_chars,
+                include_citations=include_citations,
+                **kwargs,
+            )
+            results = retrieval["hits"]
+            citations = retrieval["citations"]
+            report = retrieval["report"]
 
             if not results:
                 return f"🔍 未找到与 '{query}' 相关的内容"
@@ -360,7 +476,7 @@ class RAGTool(Tool):
             for i, result in enumerate(results, 1):
                 meta = result.get("metadata", {})
                 score = result.get("score", 0.0)
-                content = meta.get("content", "")[:200] + "..."
+                content = (result.get("content") or meta.get("content", ""))[:200] + "..."
                 source = meta.get("source_path", "unknown")
 
                 # 安全处理Unicode
@@ -373,12 +489,32 @@ class RAGTool(Tool):
                 clean_content = clean_text(content)
                 clean_source = clean_text(source)
 
-                search_result.append(f"\n{i}. 文档: **{clean_source}** (相似度: {score:.3f})")
+                score_line = f"(相似度: {score:.3f}"
+                if result.get("rerank_score") is not None:
+                    score_line += f", 重排分: {float(result['rerank_score']):.3f}"
+                score_line += ")"
+
+                search_result.append(f"\n{i}. 文档: **{clean_source}** {score_line}")
                 search_result.append(f"   {clean_content}")
 
                 if include_citations and meta.get("heading_path"):
                     clean_heading = clean_text(str(meta['heading_path']))
                     search_result.append(f"   章节: {clean_heading}")
+
+            # 把三段式各段的实际去向写进输出：不可用时也能看出走了哪条兜底路径
+            if report.get("stage_mode") != "basic":
+                search_result.append(
+                    "\n三段式："
+                    f"召回池 {report.get('pool_size', 0)} -> "
+                    f"重排 {report.get('rerank_strategy', 'none')} -> "
+                    f"邻居补充 {report.get('expanded_additions', 0)} -> "
+                    f"压缩后 {report.get('final_items', 0)} 条 "
+                    f"({report.get('context_chars', 0)} 字符)"
+                )
+                if citations:
+                    search_result.append("引用：" + ", ".join(
+                        f"[{c['index']}] {c.get('source_path') or c.get('doc_id')}" for c in citations
+                    ))
 
             return "\n".join(search_result)
 
@@ -406,22 +542,22 @@ class RAGTool(Tool):
             user_question = user_question.strip()
             print(f"🔍 智能问答: {user_question}")
 
-            # 1. 检索相关内容
-            pipeline = self._get_pipeline(namespace)
+            # 1. 检索相关内容（统一三段式入口）
             search_start = time.time()
 
-            if enable_advanced_search:
-                results = pipeline["search_advanced"](
-                    query=user_question,
-                    top_k=limit,
-                    enable_mqe=True,
-                    enable_hyde=True
-                )
-            else:
-                results = pipeline["search"](
-                    query=user_question,
-                    top_k=limit
-                )
+            retrieval = self._retrieve(
+                query=user_question,
+                limit=limit,
+                namespace=namespace,
+                enable_advanced_search=enable_advanced_search,
+                max_chars=max_chars,
+                include_citations=include_citations,
+                **kwargs,
+            )
+            results = retrieval["hits"]
+            report = retrieval["report"]
+            stage_context = retrieval["context"]
+            stage_citations = retrieval["citations"]
 
             search_time = int((time.time() - search_start) * 1000)
 
@@ -435,34 +571,46 @@ class RAGTool(Tool):
                 )
 
             # 2. 智能整理上下文
-            context_parts = []
-            citations = []
-            total_score = 0
+            #    三段式已经产出「重排 + 压缩 + 引用」后的上下文；basic 形态下
+            #    ``context`` 为空，退回旧的逐片段拼接路径，保持行为不回退。
+            citations: List[Dict[str, Any]] = []
+            total_score = 0.0
 
-            for i, result in enumerate(results):
-                meta = result.get("metadata", {})
-                content = meta.get("content", "").strip()
-                source = meta.get("source_path", "unknown")
-                score = result.get("score", 0.0)
-                total_score += score
+            if stage_context:
+                context = stage_context
+                if include_citations:
+                    citations = [
+                        {
+                            "index": c["index"],
+                            "source": os.path.basename(str(c.get("source_path") or c.get("doc_id") or "unknown")),
+                            "score": float(c.get("score") or 0.0),
+                        }
+                        for c in stage_citations
+                    ]
+                total_score = sum(float(r.get("score", 0.0)) for r in results)
+            else:
+                context_parts = []
+                for i, result in enumerate(results):
+                    meta = result.get("metadata", {})
+                    content = (result.get("content") or meta.get("content", "")).strip()
+                    source = meta.get("source_path", "unknown")
+                    score = result.get("score", 0.0)
+                    total_score += score
 
-                if content:
-                    # 清理内容格式
-                    cleaned_content = self._clean_content_for_context(content)
-                    context_parts.append(f"片段 {i + 1}：{cleaned_content}")
+                    if content:
+                        cleaned_content = self._clean_content_for_context(content)
+                        context_parts.append(f"片段 {i + 1}：{cleaned_content}")
 
-                    if include_citations:
-                        citations.append({
-                            "index": i + 1,
-                            "source": os.path.basename(source),
-                            "score": score
-                        })
+                        if include_citations:
+                            citations.append({
+                                "index": i + 1,
+                                "source": os.path.basename(source),
+                                "score": score
+                            })
 
-            # 3. 构建上下文（智能截断）
-            context = "\n\n".join(context_parts)
-            if len(context) > max_chars:
-                # 智能截断，保持完整性
-                context = self._smart_truncate_context(context, max_chars)
+                context = "\n\n".join(context_parts)
+                if len(context) > max_chars:
+                    context = self._smart_truncate_context(context, max_chars)
 
             # 4. 构建增强提示词
             system_prompt = self._build_system_prompt()
@@ -488,7 +636,8 @@ class RAGTool(Tool):
                 citations=citations if include_citations else None,
                 search_time=search_time,
                 llm_time=llm_time,
-                avg_score=total_score / len(results) if results else 0
+                avg_score=total_score / len(results) if results else 0,
+                report=report,
             )
 
             return final_answer
@@ -545,7 +694,8 @@ class RAGTool(Tool):
         )
 
     def _format_final_answer(self, question: str, answer: str, citations: Optional[List[Dict]] = None,
-                             search_time: int = 0, llm_time: int = 0, avg_score: float = 0) -> str:
+                             search_time: int = 0, llm_time: int = 0, avg_score: float = 0,
+                             report: Optional[Dict[str, Any]] = None) -> str:
         """格式化最终答案"""
         result = [f"🤖 **智能问答结果**\n"]
         result.append(answer)
@@ -556,6 +706,15 @@ class RAGTool(Tool):
                 score_emoji = "🟢" if citation["score"] > 0.8 else "🟡" if citation["score"] > 0.6 else "🔵"
                 result.append(
                     f"{score_emoji} [{citation['index']}] {citation['source']} (相似度: {citation['score']:.3f})")
+
+        # 添加检索链路说明：让「重排不可用 -> 走了图信号兜底」这种降级可见
+        if report and report.get("stage_mode") != "basic":
+            result.append(
+                f"\n🧩 检索链路：召回池 {report.get('pool_size', 0)} → "
+                f"重排 {report.get('rerank_strategy', 'none')} → "
+                f"邻居补充 {report.get('expanded_additions', 0)} → "
+                f"压缩后 {report.get('final_items', 0)} 条"
+            )
 
         # 添加性能信息（调试模式）
         result.append(f"\n⚡ 检索: {search_time}ms | 生成: {llm_time}ms | 平均相似度: {avg_score:.3f}")
@@ -651,24 +810,22 @@ class RAGTool(Tool):
             if not query:
                 return ""
 
-            # 使用统一 RAG 管道搜索
-            pipeline = self._get_pipeline(namespace)
-            results = pipeline["search"](
+            # 与 ask / search 共用同一条三段式链路：这里给 Agent 注入的上下文，
+            # 必须是已经过重排与压缩的那份，而不是原始召回结果。
+            retrieval = self._retrieve(
                 query=query,
-                top_k=limit
+                limit=limit,
+                namespace=namespace,
+                max_chars=max_chars,
+                include_citations=False,
+                enable_advanced_search=True,
             )
-
-            if not results:
-                return ""
-
-            # 合并上下文
-            context_parts = []
-            for result in results:
-                content = result.get("metadata", {}).get("content", "")
-                if content:
-                    context_parts.append(content)
-
-            merged_context = "\n\n".join(context_parts)
+            merged_context = retrieval["context"]
+            if not merged_context:
+                merged_context = "\n\n".join(
+                    (item.get("content") or item.get("metadata", {}).get("content", ""))
+                    for item in retrieval["hits"]
+                )
 
             # 限制长度
             if len(merged_context) > max_chars:

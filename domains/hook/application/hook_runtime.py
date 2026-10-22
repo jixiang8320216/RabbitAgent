@@ -29,8 +29,10 @@ HookDecisionAction / HookRunStatus）都已就位，唯独缺执行器。
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
+import traceback
 import typing
 from dataclasses import dataclass, field
 
@@ -48,6 +50,7 @@ __all__ = [
     "HookRuntime",
     "SECURITY_CRITICAL_EVENTS",
     "DECISION_SEVERITY",
+    "ERROR_SUMMARY_MAX_LENGTH",
 ]
 
 # 需要 fail-close 的安全敏感事件：这些事件上 hook 崩溃不能放行，
@@ -70,6 +73,65 @@ DECISION_SEVERITY: dict[HookDecisionAction, int] = {
     HookDecisionAction.DENY: 5,
     HookDecisionAction.BLOCK: 5,
 }
+
+#: 对外错误摘要的最大长度：够定位问题，又不至于把内部细节整段倒出去。
+ERROR_SUMMARY_MAX_LENGTH = 200
+
+#: 绝对路径在对外摘要里的占位符。
+_PATH_PLACEHOLDER = "<path>"
+
+#: 文件绝对路径（Windows 与 POSIX）。对外摘要里一律替换成占位符——
+#: 绝对路径会泄漏部署目录、用户名与内部包结构，属于敏感信息（指南 L4-4.4）。
+_ABSOLUTE_PATH_PATTERN = re.compile(
+    r"""(?:
+        (?<![A-Za-z0-9])[A-Za-z]:[\\/]    # Windows 盘符：C:\...
+        (?:[^\\/:*?"<>|\r\n]+[\\/])*         # 中间目录（允许空格）
+        [^\\/:*?"<>|\r\n]*                  # 末段文件名
+        |
+        (?:/\.\./|\.\./|/)                  # POSIX 绝对路径起点
+        [^\s'"<>|]*                        # 路径其余部分
+    )""",
+    re.VERBOSE,
+)
+
+
+def _sanitize_message(message: str) -> str:
+    """把消息里的文件绝对路径替换成占位符。"""
+    if not message:
+        return ""
+    return _ABSOLUTE_PATH_PATTERN.sub(_PATH_PLACEHOLDER, message)
+
+
+def _error_summary(
+    error: BaseException,
+    max_length: int = ERROR_SUMMARY_MAX_LENGTH,
+) -> str:
+    """把异常压成**对外可暴露**的摘要：异常类型 + 脱敏后的短消息。
+
+    对外摘要不含 traceback，也不含文件绝对路径——完整细节（含路径）只留在
+    :attr:`HookOutcome.detail` 里供内部排障，不进对外响应。
+    """
+    message = _sanitize_message(" ".join(str(error).split()))
+    if len(message) > max_length:
+        message = message[:max_length] + "…"
+    name = type(error).__name__
+    return f"{name}: {message}" if message else name
+
+
+def _error_detail(error: BaseException) -> str:
+    """取异常的完整细节（类型 + 消息 + traceback），仅供内部排障。
+
+    hook 在子线程里执行，因此不能用 ``traceback.format_exc()``（那是当前
+    线程的栈），必须从异常对象自带的 ``__traceback__`` 取。
+    """
+    try:
+        formatted = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
+    except Exception:  # noqa: BLE001 — 排障信息取不到也不能影响主流程
+        formatted = ""
+    message = str(error)
+    return f"{type(error).__name__}: {message}\n{formatted}".rstrip()
 
 
 def _as_decision(value: typing.Any) -> HookDecisionAction:
@@ -139,7 +201,13 @@ class HookInvocation:
 
 @dataclass(frozen=True)
 class HookOutcome:
-    """单条 hook 的执行结果。"""
+    """单条 hook 的执行结果。
+
+    :param error:  对外可暴露的错误**摘要**：异常类型 + 脱敏短消息。
+                   不含 traceback，也不含文件绝对路径（指南 L4-4.4）。
+    :param detail: 内部排障用的完整细节（含 traceback 与原始路径），
+                   只进日志与调试，不进对外响应。
+    """
 
     name: str
     status: HookRunStatus
@@ -147,6 +215,7 @@ class HookOutcome:
     reason: str = ""
     elapsed_ms: float = 0.0
     error: str = ""
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -237,17 +306,20 @@ class HookRuntime:
                         HookDecisionAction.CONTINUE, "matcher 未命中",
                     )
             except Exception as error:  # noqa: BLE001
-                logger.warning("hook %s matcher 异常: %s", name, error)
-                detail = f"{type(error).__name__}: {error}"
+                logger.warning("hook %s matcher 异常: %s", name, _error_summary(error))
+                summary = _error_summary(error)
+                detail = _error_detail(error)
                 if fail_close:
                     return HookOutcome(
                         name, HookRunStatus.FAILED,
                         HookDecisionAction.DENY,
-                        "matcher 异常，按 fail-close 阻断", error=detail)
+                        "matcher 异常，按 fail-close 阻断", error=summary,
+                        detail=detail)
                 return HookOutcome(
                     name, HookRunStatus.FAILED,
                     HookDecisionAction.CONTINUE,
-                    "matcher 异常，按 fail-open 放行", error=detail)
+                    "matcher 异常，按 fail-open 放行", error=summary,
+                    detail=detail)
 
         handler = getattr(definition, "handler", None)
         if handler is None or not callable(handler):
@@ -289,17 +361,20 @@ class HookRuntime:
 
         if "e" in error_holder:
             error = error_holder["e"]
-            detail = f"{type(error).__name__}: {error}"
-            logger.warning("hook %s 崩溃: %s", name, detail)
+            # 对外只给脱敏摘要；完整堆栈留在 detail 里（内部排障用）。
+            summary = _error_summary(error)
+            detail = _error_detail(error)
+            logger.warning("hook %s 崩溃: %s", name, summary)
+            logger.debug("hook %s 完整堆栈:\n%s", name, detail)
             if fail_close:
                 return HookOutcome(
                     name, HookRunStatus.FAILED, HookDecisionAction.DENY,
                     "hook 崩溃，按 fail-close 阻断",
-                    elapsed_ms=elapsed, error=detail)
+                    elapsed_ms=elapsed, error=summary, detail=detail)
             return HookOutcome(
                 name, HookRunStatus.FAILED, HookDecisionAction.CONTINUE,
                 "hook 崩溃，按 fail-open 放行",
-                elapsed_ms=elapsed, error=detail)
+                elapsed_ms=elapsed, error=summary, detail=detail)
 
         raw = result_holder.get("v")
         return HookOutcome(

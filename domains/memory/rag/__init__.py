@@ -45,7 +45,9 @@ _LAZY = {
     "rerank_with_cross_encoder": "domains.memory.rag.pipeline",
     "search_vectors": "domains.memory.rag.pipeline",
     "search_vectors_expanded": "domains.memory.rag.pipeline",
-    "tldr_summarize": "domains.memory.rag.pipeline",}
+    "search_three_stage": "domains.memory.rag.pipeline",
+    "tldr_summarize": "domains.memory.rag.pipeline",
+    "ThreeStageRetrievalConfig": "domains.memory.rag.pipeline",}
 
 
 def __getattr__(name):

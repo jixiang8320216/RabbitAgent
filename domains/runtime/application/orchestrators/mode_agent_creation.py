@@ -25,6 +25,7 @@ import domains.agent.application.loader.root_agent_loader as root_agent_loader
 import domains.configuration.domain.model.app_mode as app_mode_configuration
 import domains.plugin.domain as plugin_contracts
 import domains.runtime.application.orchestrators.agent_orchestration_contacts as orchestration_contracts
+import domains.runtime.application.orchestrators.mode_orchestration as mode_orchestration
 import domains.agent.domain.entities.root_agent_config as root_agent_config_module
 import domains.agent.application.loader.agent_factory as agent_factory_module
 import domains.agent.domain.aggregates.react_agent as agent_module
@@ -152,6 +153,11 @@ class ModeAgentCreationService:
         agent_factory: agent_factory_module.AgentFactory,
         model_decl: plugin_contracts.ModeDeclaration|None,
     ) -> agent_runtime_module.AgentRuntime:
+        resolved_names = host._resolve_visible_subagent_names_for_slot(
+                slot,
+                sub_agents,
+                model_decl,
+            )
         config = agent_runtime_module.AgentRuntime(
             name=slot.name,
             description=f"{slot.name} agent",
@@ -168,10 +174,11 @@ class ModeAgentCreationService:
             skill_refs=list(root_agent_config.skill_refs) if root_agent_config.skill_refs is not None else None,
             strict_mcp_servers=root_agent_config.strict_mcp_servers,
             load_agents_md= root_agent_config.load_agents_md,
-            allowed_agents=host._resolve_visible_subagent_names_for_slot(
-                slot,
-                sub_agents,
+            allowed_agents=mode_orchestration.refine_allowed_agents(
+                getattr(model_decl, "name", None) or host.app.app_mode,
                 model_decl,
+                slot.name,
+                resolved_names,
             ),
             include_agent_tools = slot.include_agent_tools,
             agent_slot=slot,

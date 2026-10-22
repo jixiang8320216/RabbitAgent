@@ -12,6 +12,9 @@ import json
 import os
 import threading
 
+from domains.shared.security.redaction import mask as redact
+from domains.shared.security.redaction import mask_mapping as redact_mapping
+
 class DocumentStore(ABC):
     """文档存储基类"""
 
@@ -217,12 +220,17 @@ class SQLiteDocumentStore(DocumentStore):
         conn = self._get_connection()
         cursor = conn.cursor()
 
+        # 写入前脱敏：用户粘贴的密钥不应进入长期记忆并在后续会话中反复召回
+        # （指南 L4-4.1 / L1-6.1「不该记的不记」）。
+        content = redact(content)
+        properties = redact_mapping(properties) if properties else properties
+
         # 确保用户存在
         cursor.execute("INSERT OR IGNORE INTO users (id, name) VALUES (?, ?)", (user_id, user_id))
 
         # 插入记忆
         cursor.execute("""
-            INSERT OR REPLACE INTO memories 
+            INSERT OR REPLACE INTO memories
             (id, user_id, content, memory_type, timestamp, importance, properties, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         """, (
@@ -256,7 +264,8 @@ class SQLiteDocumentStore(DocumentStore):
         return {
             "memory_id": row["id"],
             "user_id": row["user_id"],
-            "content": row["content"],
+            # 读出兜底脱敏：防止历史数据或绕过写入层的路径泄漏明文凭证
+            "content": redact(row["content"]),
             "memory_type": row["memory_type"],
             "timestamp": row["timestamp"],
             "importance": row["importance"],
@@ -318,7 +327,8 @@ class SQLiteDocumentStore(DocumentStore):
             memories.append({
                 "memory_id": row["id"],
                 "user_id": row["user_id"],
-                "content": row["content"],
+                # 读出兜底脱敏：防止历史数据或绕过写入层的路径泄漏明文凭证
+                "content": redact(row["content"]),
                 "memory_type": row["memory_type"],
                 "timestamp": row["timestamp"],
                 "importance": row["importance"],

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import typing
 
 # 按 session_id 取回所属 RabbitApplication 实例的可调用对象。
@@ -57,3 +58,28 @@ class SessionResumeService:
             return self._registry_loader()
         except Exception:
             return None
+
+    async def close(self) -> None:
+        """释放本服务持有的资源。
+
+        ``RabbitApplication.dispose_hook_resources`` 会调用它收尾。此前本方法
+        **只有调用点、没有定义** → ``AttributeError: 'SessionResumeService'
+        object has no attribute 'close'``，收尾链路被这条异常打断（外层虽然
+        有 try/except 兜住，但后续的插件关闭等步骤也就跟着跳过了）。
+
+        释放策略：调用一次 ``load_registry()`` 取回注册表实例（若它自身带
+        ``close``，同步或异步都支持）并关闭；之后清空 loader 与 app getter
+        引用。重复调用安全。
+        """
+        registry = self.load_registry()
+        if registry is not None:
+            closer = getattr(registry, "close", None)
+            if callable(closer):
+                try:
+                    result = closer()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:
+                    pass
+        self._registry_loader = None
+        self._app_getter = None

@@ -34,15 +34,16 @@ def default_rules() -> tuple[contracts.AuthorizationRule, ...]:
     """返回内置授权规则（按操作类型分组，组内由具体到兜底排序）。"""
     return (
         # --- code_modification：改代码 ------------------------------------
-        # _Rule(
-        #     operation_type=_Operation.CODE_MODIFICATION.value,
-        #     # 凭据/密钥类文件：泄露后影响远超仓库本身，单独提级
-        #     # 注意 \.env 要按「路径段」匹配，否则 .environment / env.py 会被误伤
-        #     pattern=r"(?i)((^|[\\/])\.env(\.|$|[\\/])|credential|secret|\.pem$|\.key$|id_rsa|\.ssh[\\/]|\.aws[\\/]|(^|[\\/])\.npmrc$)",
-        #     scope=contracts.Scope.ONCE,
-        #     risk_level=contracts.RiskLevel.HIGH,
-        #     description="Modify credential or secret-bearing file",
-        # ),
+        _Rule(
+            operation_type=_Operation.CODE_MODIFICATION.value,
+            # 凭据/密钥类文件：泄露后影响远超仓库本身，单独提级
+            # 注意 \.env 要按「路径段」匹配，否则 .environment / env.py 会被误伤
+            pattern=r"(?i)((^|[\\/])\.env(\.|$|[\\/])|credential|secret|\.pem$|\.key$|id_rsa|\.ssh[\\/]|\.aws[\\/]|(^|[\\/])\.npmrc$)",
+            scope=contracts.Scope.ONCE,
+            risk_level=contracts.RiskLevel.CRITICAL,
+            action=contracts.RuleAction.DENY,
+            description="Modify credential or secret-bearing file",
+        ),
         _Rule(
             operation_type=_Operation.CODE_MODIFICATION.value,
             pattern=r".*",
@@ -51,27 +52,27 @@ def default_rules() -> tuple[contracts.AuthorizationRule, ...]:
             description="Modify code file",
         ),
         # --- shell_command：执行 shell -------------------------------------
-        # # 1) 删除根/家目录：不可逆且无合理场景，直接拒绝
-        # _Rule(
-        #     operation_type=_Operation.SHELL_COMMAND.value,
-        #     # 只认「路径就是根/家目录本身」，rm -rf /tmp 不该落到这里
-        #     pattern=r"(?i)\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*|--force|--recursive)\s+(\*|/\s*$|/\*|~(/|\s|$)|\$HOME)",
-        #     scope=contracts.Scope.NEVER,
-        #     risk_level=contracts.RiskLevel.CRITICAL,
-        #     action=contracts.RuleAction.DENY,
-        #     description="Recursive delete targeting root or home directory",
-        # ),
-        # # 2) 文件系统级破坏：同样直接拒绝
-        # _Rule(
-        #     operation_type=_Operation.SHELL_COMMAND.value,
-        #     # 各分支自带词边界：dd 的 if= 后面紧跟路径（= 与 / 之间没有词边界），
-        #     # 统一在外层加 \b 会让这一支永远匹配不上
-        #     pattern=r"(?i)(\bmkfs(\.[a-z0-9]+)?|\bformat\s+[a-z]:|\bdd\s+if=|\bshutdown\b|\breboot\b|\bpoweroff\b|\bhalt\b|\binit\s+0)",
-        #     scope=contracts.Scope.NEVER,
-        #     risk_level=contracts.RiskLevel.CRITICAL,
-        #     action=contracts.RuleAction.DENY,
-        #     description="Filesystem-level or host power operation",
-        # ),
+        # 1) 删除根/家目录：不可逆且无合理场景，直接拒绝
+        _Rule(
+            operation_type=_Operation.SHELL_COMMAND.value,
+            # 只认「路径就是根/家目录本身」，rm -rf /tmp 不该落到这里
+            pattern=r"(?i)\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*|--force|--recursive)\s+(\*|/\s*$|/\*|~(/|\s|$)|\$HOME)",
+            scope=contracts.Scope.NEVER,
+            risk_level=contracts.RiskLevel.CRITICAL,
+            action=contracts.RuleAction.DENY,
+            description="Recursive delete targeting root or home directory",
+        ),
+        # 2) 文件系统级破坏：同样直接拒绝
+        _Rule(
+            operation_type=_Operation.SHELL_COMMAND.value,
+            # 各分支自带词边界：dd 的 if= 后面紧跟路径（= 与 / 之间没有词边界），
+            # 统一在外层加 \b 会让这一支永远匹配不上
+            pattern=r"(?i)(\bmkfs(\.[a-z0-9]+)?|\bformat\s+[a-z]:|\bdd\s+if=|\bshutdown\b|\breboot\b|\bpoweroff\b|\bhalt\b|\binit\s+0)",
+            scope=contracts.Scope.NEVER,
+            risk_level=contracts.RiskLevel.CRITICAL,
+            action=contracts.RuleAction.DENY,
+            description="Filesystem-level or host power operation",
+        ),
         _Rule(
             operation_type=_Operation.SHELL_COMMAND.value,
             pattern=r"^(\S*/)?(rm|del)\s+[rR]",
@@ -157,32 +158,33 @@ def default_rules() -> tuple[contracts.AuthorizationRule, ...]:
             risk_level=contracts.RiskLevel.HIGH,
             description="Schedule a recurring or delayed task",
         ),
-        # # --- mcp：接入 MCP 服务 --------------------------------------------
-        # # 接入 MCP 等于把外部能力注入 agent，远端服务更是等同于执行第三方代码。
-        # _Rule(
-        #     operation_type=_Operation.MCP.value,
-        #     # 非本地地址：远端 MCP 服务
-        #     pattern=r"(?i)^(https?|sse|ws|wss)://(?!localhost\b|127\.0\.0\.1|\[::1\])",
-        #     scope=contracts.Scope.ONCE,
-        #     risk_level=contracts.RiskLevel.CRITICAL,
-        #     description="Connect to a remote MCP server",
-        # ),
-        # _Rule(
-        #     operation_type=_Operation.MCP.value,
-        #     pattern=r".*",
-        #     scope=contracts.Scope.ONCE,
-        #     risk_level=contracts.RiskLevel.HIGH,
-        #     description="Connect an MCP server (injects external tools)",
-        # ),
+        # --- mcp：接入 MCP 服务 --------------------------------------------
+        # 接入 MCP 等于把外部能力注入 agent，远端服务更是等同于执行第三方代码。
+        _Rule(
+            operation_type=_Operation.MCP.value,
+            # 非本地地址：远端 MCP 服务
+            pattern=r"(?i)^(https?|sse|ws|wss)://(?!localhost\b|127\.0\.0\.1|\[::1\])",
+            scope=contracts.Scope.NEVER,
+            risk_level=contracts.RiskLevel.CRITICAL,
+            action=contracts.RuleAction.DENY,
+            description="Connect to a remote MCP server",
+        ),
+        _Rule(
+            operation_type=_Operation.MCP.value,
+            pattern=r".*",
+            scope=contracts.Scope.ONCE,
+            risk_level=contracts.RiskLevel.HIGH,
+            description="Connect an MCP server (injects external tools)",
+        ),
         # --- mcp_tool：调用 MCP 工具 ---------------------------------------
-        # _Rule(
-        #     operation_type=_Operation.MCP_TOOL.value,
-        #     # 名字里带破坏/外发语义的工具
-        #     pattern=r"(?i)(delete|remove|drop|truncate|purge|destroy|kill|terminate|exec|shell|run_command|write_file|edit_file|push|publish|send|deploy|reset)",
-        #     scope=contracts.Scope.ONCE,
-        #     risk_level=contracts.RiskLevel.HIGH,
-        #     description="Invoke an MCP tool with destructive or outbound effect",
-        # ),
+        # 名字里带破坏/外发语义的工具
+        _Rule(
+            operation_type=_Operation.MCP_TOOL.value,
+            pattern=r"(?i)(delete|remove|drop|truncate|purge|destroy|kill|terminate|exec|shell|run_command|write_file|edit_file|push|publish|send|deploy|reset)",
+            scope=contracts.Scope.ONCE,
+            risk_level=contracts.RiskLevel.HIGH,
+            description="Invoke an MCP tool with destructive or outbound effect",
+        ),
         _Rule(
             operation_type=_Operation.MCP_TOOL.value,
             pattern=r"^mcp://[^/]+/.+$",
@@ -191,21 +193,15 @@ def default_rules() -> tuple[contracts.AuthorizationRule, ...]:
             description="Invoke an MCP tool",
         ),
         # --- network_request：对外网络请求 ----------------------------------
-        # _Rule(
-        #     operation_type=_Operation.NETWORK_REQUEST.value,
-        #     # 会改变远端状态的写方法，且目标是外部地址（数据外发风险）
-        #     pattern=r"(?i)^(POST|PUT|PATCH|DELETE)\s+https?://(?!localhost\b|127\.0\.0\.1|\[::1\])",
-        #     scope=contracts.Scope.ONCE,
-        #     risk_level=contracts.RiskLevel.HIGH,
-        #     description="Outbound request that mutates remote state",
-        # ),
+        # 会改变远端状态的写方法，且目标是外部地址（数据外发风险）
         _Rule(
             operation_type=_Operation.NETWORK_REQUEST.value,
-            pattern=r".*",
-            scope=contracts.Scope.SESSION,
-            risk_level=contracts.RiskLevel.MEDIUM,
-            description="Outbound network request",
+            pattern=r"(?i)^(POST|PUT|PATCH|DELETE)\s+https?://(?!localhost\b|127\.0\.0\.1|\[::1\])",
+            scope=contracts.Scope.ONCE,
+            risk_level=contracts.RiskLevel.HIGH,
+            description="Outbound request that mutates remote state",
         ),
+        # 白名单必须排在 .* 兜底之前：首命中即止，兜底在前会让白名单成为死规则
         _Rule(
             operation_type=_Operation.NETWORK_REQUEST.value,
             pattern=r"(github\.com|huawei\.com|pypi\.org)",
@@ -213,6 +209,13 @@ def default_rules() -> tuple[contracts.AuthorizationRule, ...]:
             risk_level=contracts.RiskLevel.LOW,
             auto_approve=True,
             description="Trusted network request",
+        ),
+        _Rule(
+            operation_type=_Operation.NETWORK_REQUEST.value,
+            pattern=r".*",
+            scope=contracts.Scope.SESSION,
+            risk_level=contracts.RiskLevel.MEDIUM,
+            description="Outbound network request",
         ),
         # --- git_push：推送到远端 -------------------------------------------
         _Rule(

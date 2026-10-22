@@ -11,6 +11,10 @@
 """
 
 # 惰性导出映射：导出名 -> 定义所在模块
+# 注：Azure OpenAI / OpenAI Codex 的 provider 与 provider_configuration 此前被登记在
+# 本表里，但目标模块（``...azure_openai...`` / ``...openai_codex...``）从未迁移过来：
+# 这是一张「声明了实现、访问才报错」的坏映射。与其继续留着一颗雷，不如显式摘除——
+# 真正需要这两个 provider 时应当按 openai_compatible 同族的形态**实现后**再登记。
 _LAZY = {
     "AnthropicBetaPort": "domains.llm.provider.infrastructure.families.anthropic.request_contracts",
     "AnthropicClientPort": "domains.llm.provider.infrastructure.families.anthropic.request_contracts",
@@ -24,7 +28,6 @@ _LAZY = {
     "AsyncProviderClientPort": "domains.llm.provider.infrastructure.foundation.chat_transport.contracts",
     "AuthHook": "domains.llm.provider.infrastructure.foundation.chat_transport.contracts",
     "AuthHookProjection": "domains.llm.provider.infrastructure.foundation.chat_transport.contracts",
-    "AzureProvider": "domains.llm.provider.infrastructure.families.azure_openai.provider",
     "BUILTIN_PROVIDER_MODULES": "domains.llm.provider.infrastructure.composition._types",
     "ChatCompletionsProtocolStrategy": "domains.llm.provider.infrastructure.protocols.openai_compatible.protocol_strategy",
     "ChatModel": "domains.llm.provider.infrastructure.foundation.chat_transport.chat_model",
@@ -43,7 +46,6 @@ _LAZY = {
     "NativeOpenAiChatModel": "domains.llm.provider.infrastructure.protocols.openai_compatible.chat_model",
     "OpenAIChatPort": "domains.llm.provider.infrastructure.protocols.openai_compatible.request_contracts",
     "OpenAIClientPort": "domains.llm.provider.infrastructure.protocols.openai_compatible.request_contracts",
-    "OpenAICodexProvider": "domains.llm.provider.infrastructure.families.openai_codex.provider",
     "OpenAICompatibleAdapterBase": "domains.llm.provider.infrastructure.protocols.openai_compatible.adapter",
     "OpenAICompletionPort": "domains.llm.provider.infrastructure.protocols.openai_compatible.request_contracts",
     "OpenAIProtocolStrategy": "domains.llm.provider.infrastructure.protocols.openai_compatible.protocol_strategy",

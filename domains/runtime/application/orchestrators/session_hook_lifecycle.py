@@ -153,12 +153,12 @@ class SessionHookLifecycleCoordinator:
         *,
         resume: bool,
     ) -> None:
-        lifecycle = self.app.hook_lifecycle
+        lifecycle = self._app.hook_lifecycle
         if lifecycle is None:
             return None
         lifecycle_id = await lifecycle.initialize_session(session_id)
         metadata = self._hook_metadata(session_id, correlation_id=f"session-start:{session_id}:{'resume'if resume else 'startup'}",
-                                       entry_agent=self.app.root_agent)
+                                       entry_agent=self._app.root_agent)
         await self._refresh_hook_components(session_id, resume=resume)
         await self._dispath_session_start(lifecycle, metadata, session_id, resume=resume)
         await lifecycle.start_watching(metadata, lifecycle_id)
@@ -254,7 +254,7 @@ class SessionHookLifecycleCoordinator:
         没装配 / 没入口 / 派发失败一律返回 ``False``——收尾链路不能因为 hook
         半路炸掉而中断。
         """
-        lifecycle = self.app.hook_lifecycle
+        lifecycle = self._app.hook_lifecycle
         if lifecycle is None:
             logger.debug("%sno hook_lifecycle wired; session end skipped", _LOG_PREFIX)
             return None
@@ -262,7 +262,7 @@ class SessionHookLifecycleCoordinator:
             metadata = self._hook_metadata(
                 session_id,
                 correlation_id=f"session-end:{session_id}:{reason.value}",
-                entry_agent= self.app.root_agent,
+                entry_agent= self._app.root_agent,
             )
             if cwd is not None:
                 metadata= metadata.model_copy(update={"cwd": cwd})

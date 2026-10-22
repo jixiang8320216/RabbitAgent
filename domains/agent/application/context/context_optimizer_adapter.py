@@ -1,9 +1,9 @@
 
 
-
+import pydantic
 import logging
 import typing
-import collections.abc as abc
+import collections
 
 
 import domains.agent.infrastructure.context_optimizer_model_adapter as optimizer_model_adapter
@@ -11,7 +11,6 @@ import domains.context.application.context_optimizer as context_optimizer
 import domains.agent.domain.entities.context_optimizer_configuraion as optimizer_configuraion
 import domains.llm.provider.composition as provider_composition
 
-import pydantic
 
 from domains.llm.provider.domain import openai_app_protocol
 
@@ -30,7 +29,7 @@ class ContextOptimizerConfigurationSource(typing.Protocol):
     proxy_password: str|None
     thinking_mode: bool|None
     service_zone: str
-    metadata: abc.Mapping[str,object] |None
+    metadata: collections.abc.Mapping[str,object] |None
 
 
 class ContextOptimizerBootstrap(typing.Protocol):

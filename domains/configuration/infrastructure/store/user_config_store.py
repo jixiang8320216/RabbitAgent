@@ -8,7 +8,7 @@ from domains.configuration import JsonObject,get_user_config_dir
 from pathlib import Path
 from typing import Never
 from collections.abc import Callable
-from domains.persistence.infrastructure.file.file_lock import file_lock
+from domains.persistence.infrastructure.file.file_lock_impl import file_lock
 
 logger = logging.getLogger(__name__)
 

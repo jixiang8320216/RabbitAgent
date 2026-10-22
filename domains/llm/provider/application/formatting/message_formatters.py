@@ -322,3 +322,9 @@ class OpenAIMessageFormatter(ProviderMessageFormatter):
 
 
 
+
+
+#: 兼容别名：消息格式化器的抽象基类原名 ``MessageFormatter``，
+#: 现正式名为 ``ProviderMessageFormatter``（与 provider 家族的其他
+#: ``Provider*`` 契约命名对齐）。旧引用点继续可用。
+MessageFormatter = ProviderMessageFormatter

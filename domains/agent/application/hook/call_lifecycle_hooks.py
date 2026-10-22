@@ -28,6 +28,7 @@ observer（``on_agent_text_stream``）并用 ``on_agent_text_stream_end`` 收口
 from __future__ import annotations
 
 import asyncio
+import collections.abc
 import collections.abc as abc
 import datetime as datetime_module
 import logging
@@ -94,11 +95,11 @@ class AgentCallLifecycleHookAttacher:
     def __init__(
         self,
         *,
-        session_id_resolver: abc.Callable[[], str | None],
+        session_id_resolver: collections.abc.Callable[[], str | None],
         observer_instance: rabbit_observer.RabbitObserver | None,
-        app_resolver: abc.Callable[[],object|None],
-        parent_instance_resolver: abc.Callable[[], object | None],
-        interrupt_checker_resolver: abc.Callable[[], runtime_ports.InterruptCheckerProtocol | None],
+        app_resolver: collections.abc.Callable[[],object|None],
+        parent_instance_resolver: collections.abc.Callable[[], object | None],
+        interrupt_checker_resolver: collections.abc.Callable[[], runtime_ports.InterruptCheckerProtocol | None],
         generate_response_decision: GenerateResponseDecision,
     ) -> None:
         self._session_id_resolver = session_id_resolver
@@ -457,7 +458,7 @@ def _log_agent_completion(
     if agent_error:
         logger.warning("Agent end with error : %s- %s", agent.name, agent_error)
     else:
-        logger.info("Aggent end successfully: %s", agent.name)
+        logger.info("Agent end successfully: %s", agent.name)
 
 
 # ----------------------------------------------------------------------
@@ -478,7 +479,7 @@ _INTERRUPTED_ERROR_TEXT = "turn_cancelled"
 
 
 def _resolve_app_instance(
-    resolver: abc.Callable[[], object | None] | None,
+    resolver: collections.abc.Callable[[], object | None] | None,
 ) -> object | None:
     """取 app 实例：先问注入的 resolver，再退 ``execution_context.get_app_instance()``。"""
     if callable(resolver):
@@ -516,7 +517,7 @@ def _identifier_of(value: object) -> str | None:
 
 
 def _resolve_parent_id(
-    resolver: abc.Callable[[], object | None] | None,
+    resolver: collections.abc.Callable[[], object | None] | None,
 ) -> str | None:
     """解析父实例 id：先问注入的 resolver，再退上下文里的同名 getter。"""
     if callable(resolver):
@@ -580,8 +581,8 @@ def _format_error(value: object) -> str:
 
 
 def _interrupted(
-    checker_resolver: abc.Callable[[], object | None] | None,
-    session_resolver: abc.Callable[[], str | None] | None,
+    checker_resolver: collections.abc.Callable[[], object | None] | None,
+    session_resolver: collections.abc.Callable[[], str | None] | None,
 ) -> bool:
     """问中断检查器这一轮是不是被掐断的；问不出来一律按「没中断」。
 

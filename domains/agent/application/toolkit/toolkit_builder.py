@@ -14,12 +14,13 @@ import domains.agent.application.toolkit.toolkit_assembly as toolkit_assembly
 import domains.agent.domain.entities.agent_role as agent_role_module
 import domains.tool.core.application.registration as registration_module
 import domains.agent.application.toolkit.mcp_tool_registration as agent_mcp_tool_registration
+import collections.abc
 import collections.abc as abc
 import domains.tool.lsp as lsp
 
 logger = logging.getLogger(__name__)
 
-AgentToolkitProgressCallback=abc.Callable[[str],abc.Awaitable[None]]
+AgentToolkitProgressCallback=collections.abc.Callable[[str],collections.abc.Awaitable[None]]
 
 class AgentToolkitApplicationPort(
     expert_call_service.ExpertCallApplicationPort,

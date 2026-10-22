@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import collections
 
 import pydantic
@@ -78,6 +80,17 @@ class AgentRuntimeModelConfig(typing.Protocol):
 AgentRuntimeSkillType=typing.Literal["role","utility"]
 AgentResourceBindingMode=typing.Literal["auto","manual"]
 AgentRuntimeSlot =plugin_contracts.AgentSlot
+AgentToolCallMode = typing.Literal["native","text_parse"]
+"""
+工具调用模式：
+native 使用模型原生tool_use 块
+text_parse 文本标记解析SimpleAgent
+"""
+AgentPresetType= typing.Literal[
+    "react", "simple","plan_solve",
+    "reflection","function_call","tool_aware"
+]
+"""Agent 类型预设： 6种独立类讲解诶配置预设值。"""
 
 class AgentRuntime(pydantic.BaseModel):
 
@@ -98,6 +111,23 @@ class AgentRuntime(pydantic.BaseModel):
     model_id:str|None=None
     expert_id:str|None=None
     expert_memory_file:pathlib.Path | None=None
+
+    #预设类型（替代6个独立类）
+    preset_type: AgentPresetType="react"
+
+    #工具调用模式(原SimpleAgent="text_parse",FunctionCallAgent="native",其余无工具)
+    tool_call_mode: AgentToolCallMode="native"
+    #反思迭代配置（ReflectionAgent）
+    reflection_max_iterations: int = pydantic.Field(default=3, ge=1)
+    reflection_prompts: dict[str,str]|None = None
+
+    #规划-执行配置
+    plan_prompts :dict[str,str]|None=None
+
+    #工具调用监听回调
+    tool_call_listener_id: str|None=None
+
+    enable_meta_tool:bool=False
 
     #capabilities
     mcp_servers: list[str]=pydantic.Field(default_factory=list)

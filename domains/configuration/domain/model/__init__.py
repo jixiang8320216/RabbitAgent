@@ -20,7 +20,7 @@ _LAZY = {
     "JsonObject": "domains.configuration.domain.model.config_data",
     "LLMConfig": "domains.configuration.domain.model.llm_config",
     "LLMConfigProvider": "domains.configuration.domain.model.llm_config",
-    "ModelInfo": "domains.configuration.domain.model.app_config",
+    "ModelInfo": "domains.configuration.domain.model.runtime_descriptors",
     "OpenAIAPIProtocol": "domains.configuration.domain.model.llm_profiles",
     "RuntimeConfigModel": "domains.configuration.domain.model.config_data",
     "RuntimeLLMProfile": "domains.configuration.domain.model.llm_profiles",
@@ -28,7 +28,7 @@ _LAZY = {
     "RuntimeMCPServerConfig": "domains.configuration.domain.model.mcp_server_config",
     "RuntimeMCPTransport": "domains.configuration.domain.model.mcp_server_config",
     "RuntimeModelProfileOverride": "domains.configuration.domain.model.llm_profiles",
-    "SessionMode": "domains.configuration.domain.model.app_config",
+    "SessionMode": "domains.configuration.domain.model.runtime_descriptors",
     "clean_llm_config_for_save": "domains.configuration.domain.model.llm_config",
     "normalize_llm_config_for_read": "domains.configuration.domain.model.llm_config",
     "parse_config_data": "domains.configuration.domain.model.config_data",}

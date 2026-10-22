@@ -139,7 +139,12 @@ class MemoryManager:
                         min_importance=min_importance,
                         user_id=self.user_id
                     )
-                    all_results.append(type_reults)
+                    # 原写作 ``all_results.append(type_reults)`` —— append 进去的是
+                    # 一个 list，于是 all_results 变成 list-of-lists。随后的
+                    # ``all_results.sort(key=lambda x: x.importance)`` 会对每个
+                    # 元素（一个 list）取 .importance，直接抛 AttributeError。
+                    # 这里改成 extend，把各类型的 MemoryItem 拍平到同一层。
+                    all_results.extend(type_reults or [])
                 except Exception as e:
                     logger.warning(f"检索 {memory_type} 记忆时出错: {e}")
                     continue
@@ -221,11 +226,11 @@ class MemoryManager:
         logger.info(f"记忆遗忘完成: {total_forgotten} 条记忆")
         return total_forgotten
 
-    def consolidate_memory(
+    def consolidate_memories(
         self,
         from_type:str="working",
         to_type:str="episodic",
-        importance:float=0.7
+        importance_threshold:float=0.7
     )-> int:
         """记忆整合 - 将重要的短期记忆转换为长期记忆
 
@@ -247,7 +252,7 @@ class MemoryManager:
         # 获取需要整合的记忆
         all_memories= source_memory.get_all()
         candidates =[
-            m for m in all_memories if m.importance > importance
+            m for m in all_memories if m.importance > importance_threshold
         ]
 
         consolidated_count =0
@@ -261,6 +266,21 @@ class MemoryManager:
 
         logger.info(f"记忆整合完成: {consolidated_count} 条记忆从 {from_type} 转移到 {to_type}")
         return consolidated_count
+
+    # 兼容旧名（单数）。工具层历史上以 ``consolidate_memories`` 调用，
+    # 早期代码里则是 ``consolidate_memory``，两个名字都保留。
+    def consolidate_memory(
+        self,
+        from_type:str="working",
+        to_type:str="episodic",
+        importance:float=0.7
+    )-> int:
+        """``consolidate_memories`` 的兼容别名（保留旧参数名 ``importance``）。"""
+        return self.consolidate_memories(
+            from_type=from_type,
+            to_type=to_type,
+            importance_threshold=importance,
+        )
 
     def get_memory_stats(self)->Dict[str,Any]:
         """获取记忆统计信息 """

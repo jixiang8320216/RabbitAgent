@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 from typing import Never
 from collections.abc import Callable
-from domains.configuration.domain.protocol.project_layout import ProjectLayout
+from domains.configuration.domain.protocol.project_layout_impl import ProjectLayout
 from domains.configuration import JsonObject
 from domains.persistence.infrastructure.file import FileLockTimeoutError, FileLockUnsafePathError,file_lock,atomic_write_text
 from pydantic import TypeAdapter, ValidationError

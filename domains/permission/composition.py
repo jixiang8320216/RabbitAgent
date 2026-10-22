@@ -8,7 +8,7 @@ import domains.permission.infrastructure.plugin_policy_adapter as plugin_policy_
 
 _authorization_service = None
 
-def create_authorization_service()->_authorization_service.AuthorizationService:
+def create_authorization_service()->authorization_service.AuthorizationService:
     return authorization_service.AuthorizationService(
         approval_repository=file_approval_repository.FileApprovalRepository(),
         rule_provider=yaml_rule_provider.YamlAuthorizationRuleProvider(),

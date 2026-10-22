@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import logging
+import collections.abc
 import collections.abc as abc
 
 import domains.llm.provider.application.token.token_counter as token_counter_module
@@ -86,7 +87,7 @@ _API_PROTOCOL_ALIASES = {
 
 
 def _profile_bool(
-    profile: abc.Mapping[str, runtime_configuration.JsonValue],
+    profile: collections.abc.Mapping[str, runtime_configuration.JsonValue],
     *keys: str,
 ) -> bool | None:
     """按 ``keys`` 顺序取布尔字段；取不到或认不出返回 ``None``。
@@ -114,7 +115,7 @@ def _profile_bool(
 
 
 def _profile_value(
-    profile: abc.Mapping[str, runtime_configuration.JsonValue],
+    profile: collections.abc.Mapping[str, runtime_configuration.JsonValue],
     *keys: str,
 ) -> runtime_configuration.JsonValue | None:
     for key in keys:
@@ -123,7 +124,7 @@ def _profile_value(
     return None
 
 def _profile_string(
-    profile: abc.Mapping[str, runtime_configuration.JsonValue],
+    profile: collections.abc.Mapping[str, runtime_configuration.JsonValue],
     *keys: str,
 ) -> str | None:
    value = _profile_value(profile,*keys)
@@ -131,7 +132,7 @@ def _profile_string(
 
 
 def _profile_int(
-    profile:  abc.Mapping[str, runtime_configuration.JsonValue],
+    profile:  collections.abc.Mapping[str, runtime_configuration.JsonValue],
     *keys: str,
 ) -> int | None:
     """按 ``keys`` 顺序取整数字段；取不到或解析不了返回 ``None``。
@@ -153,7 +154,7 @@ def _coerce_api_protocol(
 
 
 def _profile_api_protocol(
-    profile:  abc.Mapping[str, runtime_configuration.JsonValue],
+    profile:  collections.abc.Mapping[str, runtime_configuration.JsonValue],
 ) -> openai_app_protocol.OpenAIAPIProtocol | None:
 
     return _coerce_api_protocol(_profile_string(profile, "apiProtocol","api_protocol"))
@@ -262,7 +263,7 @@ def get_model(
             profiles = []
         profile_configs: list[runtime_configuration.JsonObject]=[]
         for profile in profiles:
-            if not isinstance(profile, abc.Mapping):
+            if not isinstance(profile, collections.abc.Mapping):
                 raise RuntimeError("llm model configuration error profile")
             profile_configs.append(runtime_configuration.validate_json_object(profile))
         profile_config = primary_profile_selection.select_preferred_active_mapping(profile_configs)

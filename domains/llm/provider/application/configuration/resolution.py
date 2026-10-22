@@ -1,3 +1,4 @@
+import collections.abc
 import abc
 
 import domains.network.domain.proxy_configuration as proxy_configuration
@@ -6,8 +7,8 @@ import domains.llm.provider.application.capability.module_registry as provider_m
 
 
 def resolve_profile_proxy_configuration(
-    profile: abc.Mapping[str,object],
-    global_configuration:abc.Mapping[str,object],
+    profile: collections.abc.Mapping[str,object],
+    global_configuration:collections.abc.Mapping[str,object],
 )->proxy_configuration.ProxyConfiguration:
     migrated_profile = provider_profile_migration.migrate_provider_profile(profile)
     provider_id = str(migrated_profile.get("provider") or "").strip().casefold()

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .idle_gate import IdleGate
 from collections.abc import Callable
 from domains.skill.domain.heartbeat import SelfEvolutionHeartbeatRequest

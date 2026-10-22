@@ -20,5 +20,13 @@
   "demo_mode": false,
   "compressionThreshold": 600,
   "participant_model_refs": {},
+  "personalization": {
+    "rag": {
+      "enabled": false,
+      "knowledge_base_path": "./knowledge_base",
+      "collection_name": "rag_knowledge_base",
+      "namespace": "default"
+    }
+  },
   "note": "token is null"
 }

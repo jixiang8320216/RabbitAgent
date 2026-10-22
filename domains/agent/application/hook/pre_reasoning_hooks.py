@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections.abc
 import collections.abc as abc
 import datetime as datetime_module
 import inspect
@@ -90,7 +91,7 @@ def _agent_name_of(agent: agent_module.ReActAgent | None, kwargs: object) -> str
 
 def _thought_of(
     agent: agent_module.ReActAgent | None,
-    thought_resolver: abc.Callable[[typing.Any], str] | None,
+    thought_resolver: collections.abc.Callable[[typing.Any], str] | None,
 ) -> str:
     """取「模型即将要处理的东西」作为 ``thought``；取不到返回空串。
 
@@ -226,9 +227,9 @@ class AgentPreReasoningHookAttacher:
     def __init__(
         self,
         *,
-        session_id_resolver: abc.Callable[[], str | None] ,
-        message_queue_resolver: abc.Callable[[], runtime_ports.MessageQueueProtocol | None] ,
-        scheduler_resolver: abc.Callable[[], object | None],
+        session_id_resolver: collections.abc.Callable[[], str | None] ,
+        message_queue_resolver: collections.abc.Callable[[], runtime_ports.MessageQueueProtocol | None] ,
+        scheduler_resolver: collections.abc.Callable[[], object | None],
     ) -> None:
         self._message_queue_resolver = message_queue_resolver
         self._session_id_resolver = session_id_resolver
@@ -440,7 +441,7 @@ class AgentPreReasoningHookAttacher:
     @staticmethod
     def _log_injected_message(
         agent: agent_module.ReActAgent,
-        queued_messages: abc.Sequence[runtime_ports.QueuedAgentMessageProtocol] ,
+        queued_messages: collections.abc.Sequence[runtime_ports.QueuedAgentMessageProtocol] ,
     ) -> None:
         for queued_message in queued_messages:
             content = queued_message.content

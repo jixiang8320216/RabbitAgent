@@ -356,9 +356,14 @@ class TUIApplication:
                                expansion.expanded_prompt,
                                prompt_expansion=expansion,
                            )
-                       else:
-                           # 处理普通用户消息
-                           await self._enqueue_user_message(user_input)
+                   else:
+                       # 处理普通用户消息
+                       # 这里曾把 ``else`` 写在内层 ``if expansion is not None``
+                       # 层级：命令分支自带 else，非命令（自然语言）输入就落不到
+                       # 任何分支 —— 提问被静默丢弃，TUI 上只有回显，agent 从不执行
+                       # （ConPTY E2E 实测：trace 显示 action_submit 已把文本交给
+                       # future，但会话历史里查无此条、LLM 零调用）。
+                       await self._enqueue_user_message(user_input)
                except asyncio.CancelledError:
                     # 任务被取消（通常有中断触发）
                     # 中断后继续执行，不退出主循环，允许用户继续输入

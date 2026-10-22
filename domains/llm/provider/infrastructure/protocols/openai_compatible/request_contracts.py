@@ -1,12 +1,19 @@
 
 import typing
 import logging
+import collections.abc
+import collections.abc as abc
 
 import domains.llm.provider.infrastructure.protocols.openai_compatible.projections as native_transport
 import domains.agent.domain.aggregates.chat_model as chat_model
 import domains.agent.domain.aggregates.runtime_observer as runtime_observer
 import domains.agent.domain.value_objects.message as message_module
 import domains.agent.domain.value_objects.chat_response as chat_contracts
+
+#: 可中断睡眠：接收 (秒数, 原因)，返回可等待对象。
+#: 与 anthropic 版 request_contracts 保持同一签名，便于两条 provider 链路
+#: 复用同一套中断与重试编排。
+InterruptibleSleep = collections.abc.Callable[[float, str], abc.Awaitable[None]]
 
 
 class OpenAICompletionPort(typing.Protocol):

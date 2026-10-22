@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import typing
+import collections.abc
 import collections.abc as abc
 
 JsonObject = dict[str, typing.Any]
@@ -66,7 +67,7 @@ def _clamp_chunk_idle_timeout(
 
 def resolve_chunk_idle_timeout(
     explicit_timeout: int |None,
-    runtime_config: abc.Mapping[str, object] | None,
+    runtime_config: collections.abc.Mapping[str, object] | None,
 )->int:
     if explicit_timeout is not None and explicit_timeout > 0:
         return _clamp_chunk_idle_timeout(int(explicit_timeout))

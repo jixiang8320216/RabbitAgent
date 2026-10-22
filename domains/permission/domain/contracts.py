@@ -165,9 +165,9 @@ class AuthorizationRule(pydantic.BaseModel):
     def matches(self, operation_type: str, target: str) -> bool:
         """判断本规则是否命中给定操作。
 
-        :param operation_type: 待判定的操作类型（字符串）。
+        :param operation_type: 待判定的操作类型（字符串或 ``OperationType``）。
         :param target: 待匹配的目标串。
-        :return: 命中返回真；规则被停用或类型不符时返回假。
+        :return: 命中返回真；规则被停用、类型不符或目标不是字符串时返回假。
         """
         if not self.enabled:
             return False
@@ -175,7 +175,13 @@ class AuthorizationRule(pydantic.BaseModel):
             operation_type = operation_type.value
         if self.operation_type != operation_type:
             return False
-        return self.compiled.search(target or "") is not None
+        # 非字符串目标一律不命中：``re.Pattern.search`` 遇 bytes/int 会抛 TypeError，
+        # 而调用方可能来自未校验的外部输入。抛异常会让整条规则表求值中断，
+        # 反而使后续规则（含高危规则）全部跳过——这正是防护被绕过的路径。
+        # 这里选择「保守不匹配」，由调用方决定如何处理非法输入。
+        if not isinstance(target, str):
+            return False
+        return self.compiled.search(target) is not None
 
     def __repr__(self) -> str:
         return (

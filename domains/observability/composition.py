@@ -1,6 +1,7 @@
 import threading
 import logging
 import pydantic
+import collections.abc
 import collections.abc as abc
 
 import domains.observability.telemetry_config as observability_configuration
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 # 初始化遥测： 配置遥测并显式启动选定的平台适配器
 def initialize_telemetry(
     entry_point:str,
-    config_data: abc.Mapping[str,pydantic.JsonValue]|None = None,
+    config_data: collections.abc.Mapping[str,pydantic.JsonValue]|None = None,
 )->observability_configuration.TelemetryConfig:
     if entry_point not in {"cli","web"}:
         raise ValueError(f"Invalid entry_point {entry_point}")

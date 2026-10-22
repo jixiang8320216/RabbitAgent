@@ -25,6 +25,7 @@ _LAZY = {
     "HookRunStatus": "domains.hook.application.hook_runtime",
     "HookRuntime": "domains.hook.application.hook_runtime",
     "HookSnapshot": "domains.hook.application.hook_runtime",
+    "HookManagementUseCases": "domains.hook.application.hook_management",
     "SECURITY_CRITICAL_EVENTS": "domains.hook.application.hook_runtime",}
 
 

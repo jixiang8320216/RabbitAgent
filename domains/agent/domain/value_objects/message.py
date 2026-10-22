@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import collections.abc
 import datetime as datetime_module
 import typing

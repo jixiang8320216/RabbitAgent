@@ -12,6 +12,7 @@
 
 # 惰性导出映射：导出名 -> 定义所在模块
 _LAZY = {
+    "StoreExpert": "domains.expert.domain.store_expert",
 }
 
 

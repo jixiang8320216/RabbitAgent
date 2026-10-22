@@ -91,12 +91,18 @@ class MCPManager:
         ``MCPToolProjectionMode.EAGER``。
     :param runtime_configs: ``runtime_confgis`` 的正确拼写别名。
     :param server_configs: 历史别名。
+
+    投影模式与注册表是**正交**的：``EAGER`` 与 ``GATEWAY`` 只是「工具怎么投影给
+    agent」不同，两种模式下已配置的服务都要进注册表，因此注册逻辑不按投影模式
+    分支。
     """
 
     def __init__(
         self,
         *,
         runtime_configs: typing.Sequence[ServerConfig] | None = None,
+        runtime_confgis: typing.Sequence[ServerConfig] | None = None,
+        server_configs: typing.Sequence[ServerConfig] | None = None,
         authorization_service: typing.Any = None,
         tool_projection_mode: tool_projection.MCPToolProjectionMode | str | None = None,
         elicitation_handler: typing.Any = None,
@@ -110,8 +116,12 @@ class MCPManager:
         self._authorization_service = authorization_service
         self._elicitation_handler = elicitation_handler
         self._tool_projection_mode = _coerce_projection_mode(tool_projection_mode)
-        self._mcp_registry = MCPServerRegistry(
+        # 服务配置来源按「调用点拼写 → 正确拼写 → 历史别名」取第一个非空者，
+        # 随后**必须**整理进注册表——注册表为空等于所有已配置服务都不可用。
+        raw_configs = _first_config_source(
+            runtime_confgis, runtime_configs, server_configs
         )
+        self._mcp_registry = MCPServerRegistry(_register_servers(raw_configs))
         if authorization_service is None:
             logger.warning("[MCP] MCPManager 未装配 authorization_service；MCP 调用将不经过审批")
         if elicitation_handler is None:

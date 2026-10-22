@@ -7,10 +7,10 @@ import domains.llm.provider.application.capability.provider_module as provider_m
 class _AuthenticationRuntimeSlot:
     def __init__(
         self,
-        factory: collections.abc.Callable[[],provider_module.ProviderAuthenticationRunimePort],
+        factory: collections.abc.Callable[[],provider_module.ProviderAuthenticationRuntimePort],
          )->None:
         self._factory = factory
-        self._runtime: provider_module.ProviderAuthenticationRunimePort|None = None
+        self._runtime: provider_module.ProviderAuthenticationRuntimePort|None = None
 
 # 职责： 进程级单例注册表，管理所有Provider 家族模块的注册、查询和生命周期。是Provider能力的唯一权威查询肉蔻（canonical lookup）和生命周期所有者（lifecycle owner）
 class ProviderModuleRegistry:

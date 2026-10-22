@@ -378,6 +378,12 @@ Screen{
     def action_submit(self)->None:
         if self.awaiting_interrupt_confirm:
             return
+        # 提交前必须收起补全列表：否则它继续保持 ``show`` 类，
+        # 后续按键都会被 ``_route_key`` 判定为「补全列表可见」而转给
+        # ``_handle_completion_list_key`` —— 下一次回车被回填逻辑消费，
+        # 消息永远提交不出去（ConPTY E2E 实测：命令执行后连发自然语言提问，
+        # 提问只回显不进 agent 回合，会话历史里查无此条）。
+        self.hide_list()
         text_area = self.query_one("#user-input", UserInputArea)
         user_input = text_area.text.strip()
         if not user_input:
@@ -400,10 +406,25 @@ Screen{
         user_input = user_input.replace("[","\\[")
 
         if mount:
-            chat_area = self.query_one("#chat-area")
-            chat_area.mount(Static(f"{user_input}",classes="user-msg"))
-            # Textual 8 没有 call_after_ready，只有 call_after_refresh
-            self.call_after_refresh(chat_area.scroll_end,animate=False)
+            # 此前这里直接 ``chat_area.mount(...)``，绕过了 ``safe_mount`` 的
+            # 退出竞态防护：在「``#chat-area`` 自身尚未 is_mounted」的窗口里
+            # （TUI 刚启动、或 ``/exit`` 正在拆卸界面）会抛::
+            #
+            #     textual.widget.MountError: Can't mount widget(s) before
+            #     VerticalScroll(id='chat-area') is mounted
+            #
+            # 该异常从 ``message_pump._flush_next_callbacks`` 冒出来，被 Textual
+            # 判成「unhandled exception」→ ``App.return_code=1``，一次本该
+            # 成功的问答被记成异常退出（日志里还附一条误导性的
+            # ``CLI APP EXIST ABNORMALLY``）。改走 ``safe_mount``。
+            try:
+                chat_area = self.query_one("#chat-area", VerticalScroll)
+            except Exception:
+                chat_area = None
+            if chat_area is not None:
+                self.safe_mount(chat_area, Static(f"{user_input}", classes="user-msg"))
+            else:
+                logger.debug("user echo skipped: #chat-area unavailable")
 
         if self._input_future  and not self._input_future.done():
             self._input_future.set_result(user_input)

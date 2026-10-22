@@ -1,5 +1,9 @@
 import abc
+import typing
 from typing import Optional
+
+if typing.TYPE_CHECKING:  # pragma: no cover
+    from domains.permission.domain.contracts import AuthorizationRule
 
 
 class ConfirmationStrategy(abc.ABC):
@@ -26,3 +30,28 @@ class ConfirmationStrategy(abc.ABC):
     def get_active_startegy(cls) -> "Optional[ConfirmationStrategy]":
         """获取当前注册的确认策略；未注册返回 None。"""
         return cls._active_startegy
+
+    def confirm(
+        self,
+        operation_type: str,
+        target: str,
+        *,
+        rule: "Optional[AuthorizationRule]" = None,
+        reason: str = "",
+    ) -> bool:
+        """请求用户确认一次高危操作。
+
+        基类默认**拒绝**：安全场景必须 fail-close——拿不到用户应答时
+        放行等于把不可逆操作交给默认值。子类应覆盖为真实的交互确认。
+
+        :param operation_type: 操作类型字符串（如 ``shell_command``）。
+        :param target: 待确认的目标（命令串、文件路径等）。
+        :param rule: 命中的授权规则，可用于展示风险等级与作用域。
+        :param reason: 触发确认的原因说明。
+        :return: 用户明确同意返回 True；拒绝或无法确认返回 False。
+        """
+        return False
+
+    def request_permission(self, *args: typing.Any, **kwargs: typing.Any) -> bool:
+        """``confirm`` 的别名，兼容历史命名。"""
+        return self.confirm(*args, **kwargs)

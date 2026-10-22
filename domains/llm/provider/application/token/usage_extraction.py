@@ -25,9 +25,9 @@ class TokenExtractor:
 
 
     @staticmethod
-    def from_anthropic(raw_usage:object|None)->chat_contracts.CHatUsage:
+    def from_anthropic(raw_usage:object|None)->chat_contracts.ChatUsage:
         if not raw_usage:
-            return chat_contracts.CHatUsage()
+            return chat_contracts.ChatUsage()
         try:
             usage= _AnthropicUsageProjection.model_validate(raw_usage)
         except pydantic.ValidationError :

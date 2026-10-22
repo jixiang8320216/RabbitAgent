@@ -30,7 +30,7 @@ _LAZY = {
     "MCPTool": "domains.tool.builtin.protocol_tools",
     "MCPWrappedTool": "domains.tool.builtin.mcp_wrapper_tool",
     "MCP_SERVER_ENV_MAP": "domains.tool.builtin.protocol_tools",
-    "MemoryConfig": "domains.tool.builtin.memory_tool",
+    "MemoryConfig": "domains.memory.base",
     "MemoryTool": "domains.tool.builtin.memory_tool",
     "NoteTool": "domains.tool.builtin.note_tool",
     "RAGTool": "domains.tool.builtin.rag_tool",

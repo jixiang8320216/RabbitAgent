@@ -12,9 +12,9 @@ class AuthorizationService:
         self,
         approval_repository: ports.ApprovalRepository,
         rule_provider: ports.AuthorizationRuleProvider,
-        context_provider: ports.AuthorizationContextpRrovider,
+        context_provider: ports.AuthorizationContextProvider,
         confirmation_gateway: ports.ConfirmationGateway,
-        plugin_policy: ports.AuthorizationPolicyPlugib,
+        plugin_policy: ports.AuthorizationPolicyPlugin,
         hook_gateway: ports.AuthorizationHookGateway|None=None,
     )->None:
         self._approval_repository = approval_repository

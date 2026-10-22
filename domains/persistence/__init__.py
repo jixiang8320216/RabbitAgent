@@ -15,11 +15,11 @@ _LAZY = {
     "AppStateDocument": "domains.persistence.infrastructure.app_state_document",
     "CheckpointBoudary": "domains.persistence.domain.conversation_branch",
     "CheckpointBoundary": "domains.persistence.domain.conversation_branch",
-    "DEFAULT_FILE_LOCK_SECONDS": "domains.persistence.infrastructure.file.file_lock",
+    "DEFAULT_FILE_LOCK_SECONDS": "domains.persistence.infrastructure.file.file_lock_impl",
     "DEFAULT_FILE_LOCK_TIMEOUT_SECONDS": "domains.persistence.domain.file_lock_policy",
     "FileAppStateStore": "domains.persistence.infrastructure.file.file_app_state_store",
-    "FileLockTimeoutError": "domains.persistence.infrastructure.file.file_lock",
-    "FileLockUnsafePathError": "domains.persistence.infrastructure.file.file_lock",
+    "FileLockTimeoutError": "domains.persistence.infrastructure.file.file_lock_impl",
+    "FileLockUnsafePathError": "domains.persistence.infrastructure.file.file_lock_impl",
     "FileSessionSnapshotStore": "domains.persistence.infrastructure.file.file_session_snapshot_store",
     "JsonObject": "domains.persistence.infrastructure.app_state_document",
     "PersistencePlane": "domains.persistence.application.persistence_plane",
@@ -27,7 +27,7 @@ _LAZY = {
     "atomic_write_json": "domains.persistence.infrastructure.file.atomic_write",
     "atomic_write_text": "domains.persistence.infrastructure.file.atomic_write",
     "create_file_persisternce_plane": "domains.persistence.infrastructure.file.file_persisternce_factory",
-    "file_lock": "domains.persistence.infrastructure.file.file_lock",
+    "file_lock": "domains.persistence.infrastructure.file.file_lock_impl",
     "normalize_legacy_document_json": "domains.persistence.infrastructure.app_state_document",}
 
 

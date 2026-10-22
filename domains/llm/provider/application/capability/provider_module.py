@@ -1,6 +1,7 @@
 import typing
 
 import pydantic
+import collections.abc
 import collections.abc as abc
 
 from domains.llm.provider.domain import runtime_configuration
@@ -12,8 +13,8 @@ import domains.llm.provider.application.authentication.provider_authentication a
 
 type ProviderAdapterType = type[provider_adapter_port.LLMProviderAdapter]
 type ProviderConfigurationPolicyType =type[provider_configuration_policy.ProviderConfigurationPolicy]
-type ProviderProfileEnvironmentValidator= abc.Callable[[abc.Mapping[str,object]],None]
-type ProviderProfileEnvironmentSStamper =abc.Callable[[abc.Mapping[str,object]],runtime_configuration.JsonObject]
+type ProviderProfileEnvironmentValidator= collections.abc.Callable[[collections.abc.Mapping[str,object]],None]
+type ProviderProfileEnvironmentSStamper =collections.abc.Callable[[collections.abc.Mapping[str,object]],runtime_configuration.JsonObject]
 
 
 class ProviderCapabilityError(RuntimeError):
@@ -34,11 +35,11 @@ class ProviderAuthenticationHookRequest(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid")
 
 
-type ProviderAuthHookFactory= abc.Callable[
+type ProviderAuthHookFactory= collections.abc.Callable[
     ["ProviderAuthenticationHookRequest"],
     provider_authentication.ProviderAuthHook]
 
-type ProviderProfileMigrator = abc.Callable[
+type ProviderProfileMigrator = collections.abc.Callable[
     [runtime_configuration.JsonObject],
      runtime_configuration.JsonObject
 ]
@@ -78,10 +79,10 @@ class  ProviderAuthenticationCapability(pydantic.BaseModel):
     requires_api_key: bool
     inherits_global_proxy:bool=True
     auto_hook_factory:ProviderAuthHookFactory |None=None
-    oauth_service_factory: abc.Callable[[],ProviderOAuthServicePort]|None=None
-    credential_exchange_factory: abc.Callable[[], ProviderCredentialExchangePort] |None=None
-    runtime_factory: abc.Callable[[], ProviderAuthenticationRuntimePort]|None=None
-    environment_resolver: abc.Callable[[],ProviderAuthenticationEnvironment] |None = None
+    oauth_service_factory: collections.abc.Callable[[],ProviderOAuthServicePort]|None=None
+    credential_exchange_factory: collections.abc.Callable[[], ProviderCredentialExchangePort] |None=None
+    runtime_factory: collections.abc.Callable[[], ProviderAuthenticationRuntimePort]|None=None
+    environment_resolver: collections.abc.Callable[[],ProviderAuthenticationEnvironment] |None = None
     profile_environment_validator: ProviderProfileEnvironmentValidator |None = None
     profile_environment_stamper: ProviderProfileEnvironmentSStamper|None=None
 
@@ -101,9 +102,9 @@ class ProviderModelCatalogPort(typing.Protocol):
 class ProviderModeCatalogCapability(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
-    service_factory: abc.Callable[[],ProviderModelCatalogPort]
+    service_factory: collections.abc.Callable[[],ProviderModelCatalogPort]
 
-    identity_cache_updater: abc.Callable[[ProviderCatalogIdentityCacheUpate],None] |None = None
+    identity_cache_updater: collections.abc.Callable[[ProviderCatalogIdentityCacheUpate],None] |None = None
 
 
 class ProviderQuotaRequest(pydantic.BaseModel):
@@ -130,7 +131,7 @@ class ProviderQuotaUsagePort(typing.Protocol):
 class  ProviderQuotaUsageCapability(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True,extra="forbid", arbitrary_types_allowed=True)
 
-    service_factory: abc.Callable[[],ProviderQuotaUsagePort]
+    service_factory: collections.abc.Callable[[],ProviderQuotaUsagePort]
 
 
 class ProviderServiceZoneCapability(pydantic.BaseModel):

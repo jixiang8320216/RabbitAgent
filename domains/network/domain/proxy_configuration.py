@@ -1,4 +1,5 @@
 import pydantic
+import collections.abc
 import collections.abc as abc
 
 
@@ -10,15 +11,15 @@ class ProxyConfiguration(pydantic.BaseModel):
     use_proxy:bool |None= None
 
     @classmethod
-    def from_mapping(cls, value: abc.Mapping[str, object] | None) -> "ProxyConfiguration":
+    def from_mapping(cls, value: collections.abc.Mapping[str, object] | None) -> "ProxyConfiguration":
         """Build proxy settings from snake_case or camelCase configuration data."""
         if value is None:
             return cls()
-        if not isinstance(value, abc.Mapping):
+        if not isinstance(value, collections.abc.Mapping):
             raise TypeError("ProxyConfiguration.from_mapping expects a mapping")
 
         nested = value.get("proxy") or value.get("proxy_configuration")
-        source = nested if isinstance(nested, abc.Mapping) else value
+        source = nested if isinstance(nested, collections.abc.Mapping) else value
         aliases = {
             "http_proxy": ("http_proxy", "httpProxy"),
             "https_proxy": ("https_proxy", "httpsProxy"),
@@ -37,8 +38,8 @@ class ProxyConfiguration(pydantic.BaseModel):
 
 
 def resolve_profile_proxy_configuration(
-    profile:abc.Mapping[str,object],
-    global_configuration: abc.Mapping[str,object],
+    profile:collections.abc.Mapping[str,object],
+    global_configuration: collections.abc.Mapping[str,object],
     *,
     inherits_global_proxy: bool = False,
 )->ProxyConfiguration:

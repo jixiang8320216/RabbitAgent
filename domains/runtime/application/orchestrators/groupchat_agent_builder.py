@@ -161,8 +161,9 @@ class GroupChatAgentBuilder:
     ) -> plugin_contracts.ModeDeclaration | None:
         """当前生效的模式声明；读不到返回 ``None``（后续走兜底）。
 
-        注意 ``mode_registry.get(...)`` 直接返回 ``ModeDeclaration`` 本身，
-        没有 ``.declaration`` 这一层包装（与 ``_interpret_mode`` 的注释一致）。
+        ``mode_registry.get(...)`` 返回 ``RegisteredMode`` 包装对象，它通过
+        ``__getattr__`` 把属性转发给内部 ``ModeDeclaration``，因此这里返回的
+        对象可以直接按模式声明使用。
         """
         app = getattr(host, "app", None)
         declaration = getattr(app, "active_mode_declaration", None)

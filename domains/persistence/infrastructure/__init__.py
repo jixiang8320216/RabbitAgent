@@ -13,17 +13,17 @@
 # 惰性导出映射：导出名 -> 定义所在模块
 _LAZY = {
     "AppStateDocument": "domains.persistence.infrastructure.app_state_document",
-    "DEFAULT_FILE_LOCK_SECONDS": "domains.persistence.infrastructure.file.file_lock",
+    "DEFAULT_FILE_LOCK_SECONDS": "domains.persistence.infrastructure.file.file_lock_impl",
     "FileAppStateStore": "domains.persistence.infrastructure.file.file_app_state_store",
-    "FileLockTimeoutError": "domains.persistence.infrastructure.file.file_lock",
-    "FileLockUnsafePathError": "domains.persistence.infrastructure.file.file_lock",
+    "FileLockTimeoutError": "domains.persistence.infrastructure.file.file_lock_impl",
+    "FileLockUnsafePathError": "domains.persistence.infrastructure.file.file_lock_impl",
     "FileSessionSnapshotStore": "domains.persistence.infrastructure.file.file_session_snapshot_store",
     "JsonObject": "domains.persistence.infrastructure.app_state_document",
     "PersistencePlane": "domains.persistence.infrastructure.file.file_persisternce_factory",
     "atomic_write_json": "domains.persistence.infrastructure.file.atomic_write",
     "atomic_write_text": "domains.persistence.infrastructure.file.atomic_write",
     "create_file_persisternce_plane": "domains.persistence.infrastructure.file.file_persisternce_factory",
-    "file_lock": "domains.persistence.infrastructure.file.file_lock",
+    "file_lock": "domains.persistence.infrastructure.file.file_lock_impl",
     "normalize_legacy_document_json": "domains.persistence.infrastructure.app_state_document",}
 
 

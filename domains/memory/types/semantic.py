@@ -135,10 +135,21 @@ class SemanticMemory(BaseMemory):
                 logger.info("✅ 嵌入模型就绪")
         except Exception as e:
             logger.error(f"❌ 嵌入模型初始化失败: {e}")
-            raise
+            logger.info("💡 语义记忆将以「无嵌入模型模式」继续运行：仅使用本地关键词检索")
+            # 降级而非崩溃：无嵌入模型时仍可用本地检索路径
+            self.embedding_model = None
 
     def _init_databases(self):
-        """初始化专业数据库存储"""
+        """初始化专业数据库存储。
+
+        设计约束：**不得因外部数据库不可用而让整个语义记忆不可用**。
+
+        原实现在任何一步失败时直接 ``raise``，导致「没有 Qdrant / Neo4j 就连
+        语义记忆都构造不出来」—— 语义记忆还有实体/关系本地缓存这一层可用性。
+        现在改为：数据库不可用时降级为「无数据库模式」，向量写入与图写入静默
+        跳过，检索回落到本地缓存路径；``self.database_available`` 标记当前模式。
+        """
+        self.database_available = False
         try:
             # 获取数据库配置
             db_config = get_database_config()
@@ -165,6 +176,7 @@ class SemanticMemory(BaseMemory):
             if not graph_health:
                 logger.warning("⚠️ Neo4j连接异常，图搜索功能可能受限")
 
+            self.database_available = bool(vector_health and graph_health)
             logger.info(
                 f"🏥 数据库健康状态: Qdrant={'✅' if vector_health else '❌'}, Neo4j={'✅' if graph_health else '❌'}")
 
@@ -172,7 +184,11 @@ class SemanticMemory(BaseMemory):
             logger.error(f"❌ 数据库初始化失败: {e}")
             logger.info("💡 请检查数据库配置和网络连接")
             logger.info("💡 参考 DATABASE_SETUP_GUIDE.md 进行配置")
-            raise
+            logger.info("💡 语义记忆将以「无数据库模式」继续运行：向量与图写入跳过，检索回落到本地缓存")
+            # 降级而非崩溃：清空可能处于半初始化状态的句柄
+            self.vector_store = None
+            self.graph_store = None
+            self.database_available = False
 
     def _init_nlp(self):
         """初始化NLP处理器 - 智能多语言支持"""
@@ -218,9 +234,12 @@ class SemanticMemory(BaseMemory):
     def add(self, memory_item: MemoryItem) -> str:
         """添加语义记忆"""
         try:
-            # 1. 生成文本嵌入
-            embedding = self.embedding_model.encode(memory_item.content)
-            self.memory_embeddings[memory_item.id] = embedding
+            # 1. 生成文本嵌入（无嵌入模型时跳过，仅保留本地缓存与图谱路径）
+            if self.embedding_model is not None:
+                embedding = self.embedding_model.encode(memory_item.content)
+                self.memory_embeddings[memory_item.id] = embedding
+            else:
+                embedding = None
 
             # 2. 提取实体和关系
             entities = self._extract_entities(memory_item.content)
@@ -246,11 +265,15 @@ class SemanticMemory(BaseMemory):
                 "relation_count": len(relations)
             }
 
-            success = self.vector_store.add_vectors(
-                vectors=[embedding.tolist()],
-                metadata=[metadata],
-                ids=[memory_item.id]
-            )
+            success = False
+            if self.vector_store is not None and embedding is not None:
+                success = self.vector_store.add_vectors(
+                    vectors=[embedding.tolist()],
+                    metadata=[metadata],
+                    ids=[memory_item.id]
+                )
+            else:
+                logger.warning("⚠️ 向量库或嵌入模型不可用，跳过向量写入（降级模式）")
 
             if not success:
                 logger.warning("⚠️ 向量存储失败，但记忆已添加到图数据库")
@@ -281,6 +304,14 @@ class SemanticMemory(BaseMemory):
 
             # 2. 图检索
             graph_results = self._graph_search(query, limit * 2, user_id)
+
+            # 2.5 本地缓存回退：无数据库模式（或两个库都没命中）时，
+            # 用本地 semantic_memories 做关键词/实体匹配检索，
+            # 否则降级模式下语义记忆永远检索不到任何东西。
+            if not vector_results and not graph_results:
+                local_results = self._local_search(query, limit * 2, user_id)
+                if local_results:
+                    vector_results = local_results
 
             # 3. 混合排序
             combined_results = self._combine_and_rank_results(
@@ -345,8 +376,71 @@ class SemanticMemory(BaseMemory):
             logger.error(f"❌ 检索语义记忆失败: {e}")
             return []
 
+    def _local_search(self, query: str, limit: int, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """本地缓存检索（无数据库模式下的降级路径）。
+
+        不依赖 Qdrant / Neo4j，直接在 ``self.semantic_memories`` 上做
+        关键词重合度 + 实体重合度打分，输出结构与 ``_vector_search`` 一致，
+        以便后续 ``_combine_and_rank_results`` 无需区分来源。
+        """
+        try:
+            if not self.semantic_memories:
+                return []
+
+            query_lower = (query or "").lower()
+            query_words = {w for w in query_lower.split() if w}
+            # 中文无空格分词，按字符二元组补充匹配粒度
+            query_bigrams = {query_lower[i:i + 2] for i in range(len(query_lower) - 1)} or {query_lower}
+
+            results: List[Dict[str, Any]] = []
+            for mem in self.semantic_memories:
+                if user_id and mem.user_id != user_id:
+                    continue
+                if mem.metadata.get("forgotten", False):
+                    continue
+
+                content_lower = (mem.content or "").lower()
+                content_words = {w for w in content_lower.split() if w}
+                content_bigrams = {content_lower[i:i + 2] for i in range(len(content_lower) - 1)}
+
+                if query_words:
+                    word_score = len(query_words & content_words) / len(query_words)
+                else:
+                    word_score = 0.0
+                bigram_score = (
+                    len(query_bigrams & content_bigrams) / len(query_bigrams)
+                    if query_bigrams else 0.0
+                )
+                score = word_score * 0.5 + bigram_score * 0.5
+
+                if score <= 0:
+                    continue
+
+                results.append({
+                    "id": mem.id,
+                    "memory_id": mem.id,
+                    "content": mem.content,
+                    "score": score,
+                    "user_id": mem.user_id,
+                    "memory_type": mem.memory_type,
+                    "importance": mem.importance,
+                    "timestamp": int(mem.timestamp.timestamp()),
+                    "entities": mem.metadata.get("entities", []),
+                    "entity_count": len(mem.metadata.get("entities", [])),
+                    "relation_count": len(mem.metadata.get("relations", [])),
+                })
+
+            results.sort(key=lambda x: x["score"], reverse=True)
+            return results[:limit]
+        except Exception as e:
+            logger.error(f"❌ 本地缓存检索失败: {e}")
+            return []
+
     def _vector_search(self, query: str, limit: int, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Qdrant向量搜索"""
+        if self.vector_store is None:
+            logger.warning("⚠️ 向量库不可用，跳过向量检索（无数据库模式）")
+            return []
         try:
             # 生成查询向量
             query_embedding = self.embedding_model.encode(query)
@@ -382,6 +476,9 @@ class SemanticMemory(BaseMemory):
 
     def _graph_search(self, query: str, limit: int, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Neo4j图搜索"""
+        if self.graph_store is None:
+            logger.warning("⚠️ 图数据库不可用，跳过图检索（无数据库模式）")
+            return []
         try:
             # 从查询中提取实体
             query_entities = self._extract_entities(query)
@@ -655,7 +752,6 @@ class SemanticMemory(BaseMemory):
         """存储spaCy词法分析结果到Neo4j"""
         if not self.graph_store:
             return
-
         try:
             # 为每个词元创建节点
             for token in doc:
@@ -747,6 +843,15 @@ class SemanticMemory(BaseMemory):
 
     def _add_entity_to_graph(self, entity: Entity, memory_item: MemoryItem):
         """添加实体到Neo4j图数据库"""
+        # 无数据库模式：跳过远端写入，但**必须**保留本地缓存，
+        # 否则实体信息在降级模式下会全部丢失，语义记忆退化成空壳。
+        if self.graph_store is None:
+            if entity.entity_id in self.entities:
+                self.entities[entity.entity_id].frequency += 1
+                self.entities[entity.entity_id].updated_at = datetime.now()
+            else:
+                self.entities[entity.entity_id] = entity
+            return False
         try:
             # 准备实体属性
             properties = {
@@ -783,6 +888,10 @@ class SemanticMemory(BaseMemory):
 
     def _add_relation_to_graph(self, relation: Relation, memory_item: MemoryItem):
         """添加关系到Neo4j图数据库"""
+        # 无数据库模式：同实体处理，保住本地关系缓存
+        if self.graph_store is None:
+            self._add_or_update_relation(relation)
+            return False
         try:
             # 准备关系属性
             properties = {
@@ -877,14 +986,97 @@ class SemanticMemory(BaseMemory):
     # 旧的图相关性计算方法已被 _calculate_graph_relevance_neo4j 替代
 
     def _find_memory_by_id(self, memory_id: str) -> Optional[MemoryItem]:
-        """根据ID查找记忆"""
+        """根据ID查找记忆。
+
+        语义记忆的**权威副本在向量库**，本地 ``semantic_memories`` 只是进程内
+        缓存（进程重启即空；「另一个进程写入」时也不可见）。因此这里在本地
+        未命中时，会去向量库按 ``memory_id`` 拉取并**回填本地缓存** ——
+        否则 ``update`` / ``remove`` 会因为「本地没这条」而静默失败，
+        表现为「明明检索得到，却更新不了、删不掉」。
+        """
         logger.debug(f"🔍 查找记忆ID: {memory_id}, 当前记忆数: {len(self.semantic_memories)}")
         for memory in self.semantic_memories:
             if memory.id == memory_id:
                 logger.debug(f"✅ 找到记忆: {memory.content[:50]}...")
                 return memory
+        # 本地未命中 -> 向量库回填
+        restored = self._restore_from_vector_store(memory_id)
+        if restored is not None:
+            return restored
         logger.debug(f"❌ 未找到记忆ID: {memory_id}")
         return None
+
+    def _restore_from_vector_store(self, memory_id: str) -> Optional[MemoryItem]:
+        """从向量库按 ``memory_id`` 取回记忆并回填本地缓存。"""
+        if self.vector_store is None:
+            return None
+        try:
+            records = self.vector_store.get_by_memory_id(memory_id)
+        except Exception as e:
+            logger.debug(f"向量库回填失败 {memory_id}: {e}")
+            return None
+        if not records:
+            return None
+        payload = records[0]
+        content = payload.get("content", "")
+        timestamp = payload.get("timestamp")
+        if isinstance(timestamp, (int, float)):
+            timestamp = datetime.fromtimestamp(timestamp)
+        elif isinstance(timestamp, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp)
+            except ValueError:
+                timestamp = datetime.now()
+        else:
+            timestamp = datetime.now()
+        memory = MemoryItem(
+            id=memory_id,
+            content=content,
+            memory_type="semantic",
+            user_id=payload.get("user_id", "default"),
+            timestamp=timestamp,
+            importance=payload.get("importance", 0.5),
+            metadata={
+                "entities": payload.get("entities", []),
+                "entity_count": payload.get("entity_count", 0),
+                "relation_count": payload.get("relation_count", 0),
+            },
+        )
+        self.semantic_memories.append(memory)
+        logger.debug(f"♻️ 已从向量库回填记忆: {memory_id}")
+        return memory
+
+    def _upsert_to_vector_store(self, memory: MemoryItem, embedding) -> None:
+        """把更新后的记忆写回向量库（内容/向量/payload 同步）。"""
+        if self.vector_store is None:
+            return
+        if embedding is None and self.embedding_model is not None:
+            try:
+                embedding = self.embedding_model.encode(memory.content)
+            except Exception:
+                embedding = None
+        if embedding is None:
+            return
+        try:
+            payload = {
+                "memory_id": memory.id,
+                "user_id": memory.user_id,
+                "content": memory.content,
+                "memory_type": memory.memory_type,
+                "timestamp": int(memory.timestamp.timestamp()),
+                "importance": memory.importance,
+                "entities": memory.metadata.get("entities", []),
+                "entity_count": len(memory.metadata.get("entities", [])),
+                "relation_count": len(memory.metadata.get("relations", [])),
+            }
+            vector = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+            self.vector_store.add_vectors(
+                vectors=[vector],
+                metadata=[payload],
+                ids=[memory.id],
+            )
+        except Exception as e:
+            logger.debug(f"写回向量库失败 {memory.id}: {e}")
 
     def update(
             self,
@@ -901,8 +1093,9 @@ class SemanticMemory(BaseMemory):
         try:
             if content is not None:
                 # 重新生成嵌入和提取实体
-                embedding = self.embedding_model.encode(content)
-                self.memory_embeddings[memory_id] = embedding
+                if self.embedding_model is not None:
+                    embedding = self.embedding_model.encode(content)
+                    self.memory_embeddings[memory_id] = embedding
 
                 # 清理旧的实体关系
                 old_entities = memory.metadata.get("entities", [])
@@ -925,13 +1118,20 @@ class SemanticMemory(BaseMemory):
                     f"{r.from_entity}-{r.relation_type}-{r.to_entity}" for r in relations
                 ]
 
+                # 写回向量库：内容变了，向量与 payload 也必须同步，
+                # 否则下次检索召回的仍是旧内容（旧向量）。
+                self._upsert_to_vector_store(memory, embedding)
+
             if importance is not None:
                 memory.importance = importance
 
             if metadata is not None:
                 memory.metadata.update(metadata)
 
-                return True
+            # ``return True`` 原先缩进在 ``if metadata is not None:`` 块内 ——
+            # 只更新 content / importance（不传 metadata）时会落到函数末尾
+            # 返回 False，调用方据此认为「更新失败」，而数据其实已改。
+            return True
 
         except Exception as e:
             logger.error(f"❌ 更新记忆失败: {e}")
@@ -945,7 +1145,8 @@ class SemanticMemory(BaseMemory):
 
         try:
             # 删除向量
-            self.vector_store.delete_memories([memory_id])
+            if self.vector_store is not None:
+                self.vector_store.delete_memories([memory_id])
 
             # 清理实体和关系
             entities = memory.metadata.get("entities", [])
@@ -956,7 +1157,10 @@ class SemanticMemory(BaseMemory):
             if memory_id in self.memory_embeddings:
                 del self.memory_embeddings[memory_id]
 
-                return True
+            # ``return True`` 原先缩进在 ``if memory_id in self.memory_embeddings``
+            # 块内 —— 记忆没有缓存向量时（正常情况：向量已落库、进程内不缓存
+            # 副本）会落到末尾返回 False，调用方以为删除失败，而实际已删。
+            return True
 
         except Exception as e:
             logger.error(f"❌ 删除记忆失败: {e}")
@@ -969,8 +1173,27 @@ class SemanticMemory(BaseMemory):
         pass
 
     def has_memory(self, memory_id: str) -> bool:
-        """检查记忆是否存在"""
-        return self._find_memory_by_id(memory_id) is not None
+        """检查记忆是否存在。
+
+        不能只看本地缓存：语义记忆的**权威副本在向量库**里，而本地
+        ``semantic_memories`` 只是进程内缓存（重启即空；无数据库模式下
+        更是完全没有）。只查本地会让 ``MemoryManager.update_memory`` /
+        ``remove_memory`` 找不到这条记忆，表现为「明明存过，更新却说没找到」。
+        因此这里：本地命中直接返回；否则去向量库按 id 查一次。
+        """
+        if self._find_memory_by_id(memory_id) is not None:
+            return True
+        return self._exists_in_vector_store(memory_id)
+
+    def _exists_in_vector_store(self, memory_id: str) -> bool:
+        """到向量库里按 id 确认记忆是否存在。"""
+        if self.vector_store is None:
+            return False
+        try:
+            return bool(self.vector_store.has_memory(memory_id))
+        except Exception:
+            # 向量库不可用时退化为「查不到就当不存在」，不影响主流程。
+            return False
 
     def forget(self, strategy: str = "importance_based", threshold: float = 0.1, max_age_days: int = 30) -> int:
         """语义记忆遗忘机制（硬删除）"""
@@ -1071,7 +1294,8 @@ class SemanticMemory(BaseMemory):
             "graph_edges": graph_stats.get("total_relationships", 0),
             "avg_importance": sum(m.importance for m in active_memories) / len(
                 active_memories) if active_memories else 0.0,
-            "memory_type": "enhanced_semantic"
+            "memory_type": "enhanced_semantic",
+            "database_available": getattr(self, "database_available", False),
         }
 
     def get_entity(self, entity_id: str) -> Optional[Entity]:

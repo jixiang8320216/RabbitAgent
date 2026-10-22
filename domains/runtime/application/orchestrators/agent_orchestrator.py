@@ -8,6 +8,7 @@ import domains.runtime.application.orchestrators.agent_orchestration_contacts as
 import domains.runtime.application.orchestrators.agent_bootstrap as agent_bootstrap
 import domains.runtime.application.orchestrators.agent_configuration_loading as agent_configuration_loading
 import domains.runtime.application.orchestrators.mode_agent_creation as mode_agent_creation
+import domains.runtime.application.orchestrators.mode_orchestration as mode_orchestration
 import domains.runtime.application.orchestrators.groupchat_agent_builder as groupchat_agent_builder
 import domains.agent.domain.entities.agent_runtime as  agent_runtime_module
 import domains.agent.domain.entities.root_agent_config as root_agent_config_module
@@ -51,6 +52,7 @@ class AgentOrchestrator:
         self._bootstrap = agent_bootstrap.AgentBootstrapService()
         self._mode_agent_creation = mode_agent_creation.ModeAgentCreationService()
         self._groupchat_agent_builder = groupchat_agent_builder.GroupChatAgentBuilder()
+        self._mode_orchestration = mode_orchestration.ModeOrchestrationService()
 
     @property
     def llm_config(self)->typing.Any:
@@ -308,17 +310,21 @@ class AgentOrchestrator:
         registered_mode = self.app.mode_registry.get(app_mode)
         all_sub_agents = role_sub_agents + utility_sub_agents
         if registered_mode is None:
+            # 可用模式清单：``ModeDeclaration`` 没有 ``.value``，模式名取 ``.name``。
             available_modes=sorted(
-                descriptor.value for descriptor in self.app.mode_registry.available_mode_descriptors()
+                declaration.name for declaration in self.app.mode_registry.available_mode_descriptors()
             )
             if app_mode in app_mode_configuration.BUILTIN_APP_MODES:
-                raise ValueError("build-n app mode")
-            raise ValueError(f"Unknown app mode: {app_mode}")
+                raise ValueError(
+                    f"build-n app mode: {app_mode!r}; available={available_modes}"
+                )
+            raise ValueError(
+                f"Unknown app mode: {app_mode}; available={available_modes}"
+            )
         root_agent= await self._interpret_mode(
-            # 注意：``ModelRegistry.get()`` 直接返回 ``ModeDeclaration``，它
-            # **没有** ``.declaration`` 这一层包装（见 ``root_agent_loader._root_slot``
-            # 的注释）；写 ``registered_mode.declaration`` 会 AttributeError。
-            # 若将来注册表改为返回包装对象，``_interpret_mode`` 会自行解一层。
+            # ``ModelRegistry.get()`` 返回 ``RegisteredMode`` 包装对象；它已通过
+            # ``__getattr__`` 把属性转发给内部声明，因此这里既可直接当
+            # ``ModeDeclaration`` 用，也可用 ``.declaration`` 取原始声明。
             mode_decl= registered_mode,
             sub_agents=all_sub_agents,
             root_agent_config=root_agent_config,
@@ -396,26 +402,56 @@ class AgentOrchestrator:
         on_progress: typing.Optional[typing.Callable]=None,
     )-> agent_module.ReActAgent:
         self.app.active_mode_declaration = mode_decl
+        execution_plan = mode_orchestration.resolve_execution_plan(str(getattr(mode_decl, "name", "") or ""), mode_decl)
+        try:
+            # 计划挂到宿主上：TUI / CLI 可以据此展示「这个模式怎么跑」，
+            # 也让「模式 -> 拓扑 -> 执行语义」三者在同一处可查。
+            setattr(self.app, "active_execution_plan", execution_plan)
+        except Exception:
+            logger.debug("[AGENT-ORCH] cannot attach execution plan to app", exc_info=True)
+        logger.info(
+            "[AGENT-ORCH] mode=%s semantics=%s stages=%d workers=%s",
+            execution_plan.mode,
+            execution_plan.semantics,
+            len(execution_plan.stages),
+            list(execution_plan.worker_slots),
+        )
 
-        lazy_slot_names={name for name ,slot in mode_decl.agent_slots.items() if not slot.eager_creation}
-        agents:dict[str,agent_module.ReActAgent] = {}
-        for slot_name, slot in  mode_decl.agent_slots.items():
-            if slot_name in lazy_slot_names:
+        lazy_slot_names = {name for name, slot in mode_decl.agent_slots.items() if not slot.eager_creation}
+        # 按执行计划声明的阶段顺序构建槽位：流水线 / 守护这类**顺序敏感**的模式，
+        # 构建顺序与阶段顺序保持一致；计划未覆盖到的槽位（例如插件扩展出来的）
+        # 仍按声明顺序追加在后，不会因为漏登记就丢失。
+        ordered_slot_names = list(
+            dict.fromkeys(
+                [stage.slot_name for stage in execution_plan.stages]
+                + [execution_plan.root_slot]
+                + list(mode_decl.agent_slots)
+            )
+        )
+        agents: dict[str, agent_module.ReActAgent] = {}
+        for slot_name in ordered_slot_names:
+            slot = mode_decl.agent_slots.get(slot_name)
+            if slot is None or slot_name in lazy_slot_names:
                 continue
-            agent= await self._create_agent_for_slot(
+            agent = await self._create_agent_for_slot(
                 slot=slot,
                 sub_agents=sub_agents,
                 root_agent_config=root_agent_config,
-                 agent_factory=agent_factory,
+                agent_factory=agent_factory,
                 on_progress=on_progress,
                 mode_decl=mode_decl,
             )
             agents[slot_name] = agent
-        root_agent= agents.get(mode_decl.root_agent)
+        root_agent = agents.get(mode_decl.root_agent)
         if not root_agent:
             raise ValueError("root_agent is None")
 
         return root_agent
+
+    @property
+    def mode_orchestration(self) -> mode_orchestration.ModeOrchestrationService:
+        """对外暴露的执行编排器（按模式的执行语义跑多阶段任务）。"""
+        return self._mode_orchestration
 
     async def _create_agent_for_slot(
         self,
@@ -529,7 +565,7 @@ class AgentOrchestrator:
         if sub_agent_config.agent_slot is not None:
             return sub_agent_config.agent_slot
         registered_mode = self.app.mode_registry.get(self.app.app_mode)
-        # ``ModelRegistry.get()`` 现直接返回 ``ModeDeclaration``（无 ``.declaration`` 包装）
+        # ``RegisteredMode`` 已把属性转发给内部声明，此处可直接读声明上的策略。
         default_policy=registered_mode.default_contribution_policy if registered_mode is not None else {}
         return contracts.AgentSlot(
             name=sub_agent_config.name,

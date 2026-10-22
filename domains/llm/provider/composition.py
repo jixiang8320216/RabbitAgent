@@ -7,6 +7,7 @@ import domains.llm.provider.application.configuration.registry as provider_confi
 import domains.llm.provider.application.configuration.profile_migration as provider_profile_migration
 import domains.llm.provider.application.model.chat_model_creation as chat_model_creation
 import domains.llm.provider.application.formatting.formatter_creation as chat_formatter_creation
+import domains.llm.provider.application.token.token_counter as token_counter_module
 import domains.llm.provider.domain.runtime_configuration as runtime_configuration
 
 def initialize_provider_context()->None:
@@ -23,7 +24,7 @@ def initialize_provider_runtime()->None:
 
 # 通过责任链模式遍历所有已注册的Provider家族迁移器，将旧版/非标准provider配置字段规范化为当前格式，确保运行时正确匹配和创建ChatModel
 def migrate_provider_profile(
-    profile: runtime_context.JsonObject,
+    profile: runtime_configuration.JsonObject,
 )-> runtime_configuration.JsonObject:
     initialize_provider_context()  # 幂等注册所有Provider 模块
     return provider_profile_migration.migrate_provider_profile(profile)
@@ -34,10 +35,14 @@ def create_provider_factory()->provider_factory.LLMProviderFactory:
 
 get_model=chat_model_creation.get_model
 get_formatter = chat_formatter_creation.get_formatter
+#: Token 计数器：调用方（``agent_factory`` 等）按
+#: ``provider_composition.TokenCounter`` 引用，必须由本 facade 转出。
+TokenCounter = token_counter_module.TokenCounter
 
 
 __all__ = ["migrate_provider_profile",
            "initialize_provider_runtime",
            "create_provider_factory",
            "get_model",
-           "get_formatter"]
+           "get_formatter",
+           "TokenCounter"]

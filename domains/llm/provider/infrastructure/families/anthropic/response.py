@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import collections.abc
 import collections.abc as abc
 
 import pydantic
@@ -12,7 +13,7 @@ import domains.agent.domain.value_objects.message as message_module
 import domains.llm.provider.application.token.usage_extraction as token_usage_extraction
 
 _LOGGER = logging.getLogger(__name__)
-StopReasonMap = abc.Mapping[str,str]
+StopReasonMap = collections.abc.Mapping[str,str]
 
 def map_stop_reason(
     stop_reason: str|None,
@@ -34,13 +35,13 @@ def stop_details_from_sdk(stop_details: object) -> chat_contracts.ChatStopDetail
     if stop_details is None:
         return None
     try:
-        projected= native_transport._StopDetailsProjection.model_validate(stop_details)
+        projected= native_transport._StopDetailProjection.model_validate(stop_details)
     except pydantic.ValidationError:
         return None# noqa: BLE001
-    if not (projected.type or projected.catagory or projected.explanation):
+    if not (projected.type or projected.category or projected.explanation):
         return None
 
-    return chat_contracts.ChatStopDetails(type=projected.type, category=projected.catagory, explanation=projected.explanation)
+    return chat_contracts.ChatStopDetails(type=projected.type, category=projected.category, explanation=projected.explanation)
 
 
 def event_to_chat_response(

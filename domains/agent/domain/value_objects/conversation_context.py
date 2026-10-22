@@ -51,6 +51,7 @@ import typing
 import copy
 import domains.agent.domain.value_objects.message as message_module
 import domains.agent.domain.value_objects.turn_identity as turn_identity
+import domains.context.domain.history_compression_policy as policy
 
 import pydantic
 
@@ -251,9 +252,42 @@ class Context:
     def context(self)->list[message_module.Msg]:
         return [entry.message for entry in self._entries]
 
+    def replace_window(
+            self,
+            start: int,
+            end: int,
+            message: message_module.Msg,
+            mark: str = "compressed",
+    ) -> int:
+        """把 ``[start, end)`` 这段历史替换成一条消息（历史压缩的写回原语）。
+
+        为什么这个原语放在 ``Context`` 而不是让压缩服务直接改 ``_entries``：
+        上下文要保持「追加语义」的一致性 —— 替换窗口必须同步维护 entry 的
+        marks 与内部顺序，交给外部改私有列表迟早会漏掉 marks。
+
+        :return: 被替换掉的消息条数；区间非法返回 ``0``。
+        """
+        if not isinstance(message, message_module.Msg):
+            raise TypeError("message must be a Msg")
+        if start < 0 or end < start or start >= len(self._entries):
+            return 0
+        end = min(end, len(self._entries))
+        if end <= start:
+            return 0
+        removed = end - start
+        marks = [mark] if mark else []
+        self._entries[start:end] = [ContextEntry(message=message, marks=marks)]
+        return removed
+
     @property
-    def current_tokens(self)->int:
-        return 0
+    def current_tokens(self) -> int:
+        """当前历史消息的 token 估算值。
+
+        此前恒返回 ``0``，于是「按 token 阈值触发处理」的任何逻辑都无从谈起；
+        这里用领域层统一的估算口径（CJK 按字符、其余按空白分词）给出一个**单调
+        一致**的相对尺度——它的用途是阈值判断，不是计费。
+        """
+        return policy.messages_tokens([entry.message for entry in self._entries])
 
     async def get_messages(self,
         mark:str|None=None,

@@ -25,10 +25,10 @@ _LAZY = {
     "LLMConfig": "domains.configuration.domain.model.llm_config",
     "LLMConfigProvider": "domains.configuration.domain.model.llm_config",
     "MCPServerResource": "domains.configuration.domain.runtime_state.system_resources",
-    "ModelInfo": "domains.configuration.domain.model.app_config",
+    "ModelInfo": "domains.configuration.domain.model.runtime_descriptors",
     "OpenAIAPIProtocol": "domains.configuration.domain.model.llm_profiles",
     "PlanExecutionContext": "domains.configuration.domain.runtime_state.execution_context",
-    "ProjectLayout": "domains.configuration.domain.protocol.project_layout",
+    "ProjectLayout": "domains.configuration.domain.protocol.project_layout_impl",
     "PromptExpansion": "domains.configuration.domain.runtime_state.prompt_expansion",
     "RuntimeAppConfigOptions": "domains.configuration.domain.options.app_options",
     "RuntimeConfigBlock": "domains.configuration.domain.runtime_state.snapshot",
@@ -42,7 +42,7 @@ _LAZY = {
     "RuntimePluginsConfig": "domains.configuration.domain.options.plugin_options",
     "RuntimePluginsSnapshot": "domains.configuration.domain.runtime_state.snapshot",
     "RuntimeSessionConfig": "domains.configuration.domain.options.session_options",
-    "SessionMode": "domains.configuration.domain.model.app_config",
+    "SessionMode": "domains.configuration.domain.model.runtime_descriptors",
     "SubtaskExecutionState": "domains.configuration.domain.runtime_state.execution_context",
     "SystemResources": "domains.configuration.domain.runtime_state.system_resources",
     "TurnCompletionOutcome": "domains.configuration.domain.runtime_state.turn_completion",
@@ -50,7 +50,7 @@ _LAZY = {
     "clean_llm_config_for_save": "domains.configuration.domain.model.llm_config",
     "normalize_llm_config_for_read": "domains.configuration.domain.model.llm_config",
     "parse_config_data": "domains.configuration.domain.model.config_data",
-    "project_layout": "domains.configuration.domain.protocol.project_layout",}
+    "project_layout": "domains.configuration.domain.protocol.project_layout_impl",}
 
 
 def __getattr__(name):

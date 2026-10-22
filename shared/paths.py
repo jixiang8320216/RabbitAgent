@@ -64,8 +64,20 @@ def get_log_file(port:int|None=None)->Path:
 
 
 def get_config_dir()->Path:
-    """获取rabbit agent的包内置配置目录"""
-    return Path(__file__).resolve().parents[2]/"conf"
+    """获取rabbit agent的包内置配置目录。
+
+    ``shared/paths.py`` 位于 ``<项目根>/shared/paths.py``，因此
+    ``parents[0]`` = ``shared``、``parents[1]`` = 项目根。
+
+    此前写的是 ``parents[2]``，多退了一级 —— 在
+    ``D:/AI/AIProject/RabbitAgent`` 这样的布局下解析成
+    ``D:/AI/AIProject/conf``（项目**外面**的目录），于是
+    ``conf/logging.ini`` 永远找不到，``logging.config.fileConfig`` 从未执行，
+    root logger 没有任何文件 handler：所有 ``logger.error`` /
+    ``logger.exception`` 的堆栈全部丢失，TUI 出错时只剩 spinner，
+    事后也无处可查。
+    """
+    return Path(__file__).resolve().parents[1]/"conf"
 
 def get_bundled_mcp_node_bin_dir()->Path|None:
     """发现the package MCP Node executable directory， when present."""

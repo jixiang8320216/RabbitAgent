@@ -1,3 +1,4 @@
+import collections.abc
 import collections.abc as abc
 import logging
 
@@ -14,7 +15,7 @@ import datetime as datetime_module
 import domains.agent.application.context.incomplete_response_validator as incomplete_response_validator
 from domains.observability.application import observability_context
 import domains.llm.provider.application.formatting.tool_string_truncation as tool_string_truncation
-type ToolArgsSummaryFactory = abc.Callable[[str,abc.Mapping[str,object],str], str]
+type ToolArgsSummaryFactory = collections.abc.Callable[[str,collections.abc.Mapping[str,object],str], str]
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +246,7 @@ def _is_mapping(value:object)->bool:
     """判 ``Mapping``。
 
     文件顶部是 ``import collections.abc as abc``，而 ``Mapping`` 在
-    ``collections.abc`` 里（``abc.Mapping`` 并不存在）。为了不动顶部的 import，
+    ``collections.abc`` 里（``collections.abc.Mapping`` 并不存在）。为了不动顶部的 import，
     这里在**函数内**现取 ``collections.abc``——``sys.modules`` 命中，开销可忽略。
     """
     import collections.abc as collections_abc

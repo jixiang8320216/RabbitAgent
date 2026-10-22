@@ -138,6 +138,15 @@ class BaseMemory(ABC):
         import uuid
         return str(uuid.uuid4())
 
+    def get_memory_stats(self) -> Dict[str, Any]:
+        """获取记忆统计信息（``get_stats`` 的兼容别名）。
+
+        历史原因：管理器与工具层一直以 ``get_memory_stats`` 调用统计接口，
+        而各记忆类型实现的是 ``get_stats``，导致 ``MemoryManager.get_memory_stats``
+        直接抛 ``AttributeError``。这里保留一个同义别名，让两种叫法都可用。
+        """
+        return self.get_stats()
+
     def _calculate_importance(self, content: str, base_importance: float = 0.5) -> float:
         """计算记忆重要性
 

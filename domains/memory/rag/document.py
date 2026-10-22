@@ -5,6 +5,17 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 
+
+def _content_digest(text: str) -> str:
+    """对任意 ``str`` 求稳定摘要，永不因不可编码字符抛异常。
+
+    脏数据里可能出现孤立代理字符（如 ``"\\ud800"``），它们无法编码成合法
+    UTF-8；直接 ``text.encode()`` 会抛 ``UnicodeEncodeError``，导致整个
+    分块流程崩溃。这里用 ``surrogatepass`` 把这类字符按其原始码位编码，
+    摘要依然稳定且可复现（同一输入永远得到同一摘要）。
+    """
+    return hashlib.md5(text.encode("utf-8", "surrogatepass")).hexdigest()
+
 @dataclass
 class Document:
     """文档类"""
@@ -15,7 +26,7 @@ class Document:
     def __post_init__(self):
         if self.doc_id is None:
             # 基于内容生成ID
-            self.doc_id = hashlib.md5(self.content.encode()).hexdigest()
+            self.doc_id = _content_digest(self.content)
 
 @dataclass
 class DocumentChunk:
@@ -30,134 +41,132 @@ class DocumentChunk:
         if self.chunk_id is None:
             # 基于文档ID 和块索引生成ID
             chunk_content = f"{self.doc_id}_{self.chunk_index}_{self.content[:50]}"
-            self.chunk_id = hashlib.md5(chunk_content.encode()).hexdigest()
+            self.chunk_id = _content_digest(chunk_content)
 
 class DocumentProcessor:
-     """文档处理器"""
-     def __init__(
-         self,
-        chunk_size: int=1000,
-        chunk_overlap: int=200,
-        separators: Optional[List[str]]=None,
-     ):
-         self.chunk_size = chunk_size
-         self.chunk_overlap = chunk_overlap
-         self.separators = separators or ["\n\n", "\n", "。", ".", " "]
+    """文档处理器"""
+    def __init__(
+        self,
+       chunk_size: int=1000,
+       chunk_overlap: int=200,
+       separators: Optional[List[str]]=None,
+    ):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.separators = separators or ["\n\n", "\n", "。", ".", " "]
 
-     def process_document(self, document: Document):
-         """
-         处理文档，分割成块
+    def process_document(self, document: Document):
+        """
+        处理文档，分割成块
 
-         Args:
-             document: 输入文档
+        Args:
+            document: 输入文档
 
-         Returns:
-             文档块列表
-         """
-         chunks = self._split_text(document.content)
-         document_chunks = []
-         for i,chunk_content in enumerate(chunks):
-             # 创建块的元数据
-             chunk_metadata = document.metadata.copy()
-             chunk_metadata.update({
-                 "doc_id":document.doc_id,
-                 "chunk_index":i,
-                 "total_chunks":len(chunks),
-                 "processed_at":datetime.now().isoformat()
-             })
+        Returns:
+            文档块列表
+        """
+        chunks = self._split_text(document.content)
+        document_chunks = []
+        for i,chunk_content in enumerate(chunks):
+            # 创建块的元数据
+            chunk_metadata = document.metadata.copy()
+            chunk_metadata.update({
+                "doc_id":document.doc_id,
+                "chunk_index":i,
+                "total_chunks":len(chunks),
+                "processed_at":datetime.now().isoformat()
+            })
 
-             chunk =DocumentChunk(
-                 content=chunk_content,
-                 metadata=chunk_metadata,
-                 doc_id=document.doc_id,
-                 chunk_index=i
-             )
-             document_chunks.append(chunk)
-         return document_chunks
+            chunk =DocumentChunk(
+                content=chunk_content,
+                metadata=chunk_metadata,
+                doc_id=document.doc_id,
+                chunk_index=i
+            )
+            document_chunks.append(chunk)
+        return document_chunks
 
-     def process_documents(self, documents: List[Document]) -> List[DocumentChunk]:
-         """
-         批量处理文档
+    def process_documents(self, documents: List[Document]) -> List[DocumentChunk]:
+        """
+        批量处理文档
 
-         Args:
-             documents: 文档列表
+        Args:
+            documents: 文档列表
 
-         Returns:
-             所有文档块列表
-         """
-         all_chunks = []
-         for document in documents:
-             chunks = self.process_document(document)
-             all_chunks.extend(chunks)
+        Returns:
+            所有文档块列表
+        """
+        all_chunks = []
+        for document in documents:
+            chunks = self.process_document(document)
+            all_chunks.extend(chunks)
 
-         return all_chunks
+        return all_chunks
 
+    def _split_text(self, text: str) -> List[str]:
+        """
+        分割文本为块
 
-def _split_text(self, text: str) -> List[str]:
-    """
-    分割文本为块
+        Args:
+            text: 输入文本
 
-    Args:
-        text: 输入文本
+        Returns:
+            文本块列表
+        """
+        if len(text) <= self.chunk_size:
+            return [text]
 
-    Returns:
-        文本块列表
-    """
-    if len(text) <= self.chunk_size:
-        return [text]
+        chunks = []
+        start = 0
 
-    chunks = []
-    start = 0
+        while start < len(text):
+            # 确定块的结束位置
+            end = start + self.chunk_size
 
-    while start < len(text):
-        # 确定块的结束位置
-        end = start + self.chunk_size
+            if end >= len(text):
+                # 最后一块
+                chunks.append(text[start:])
+                break
 
-        if end >= len(text):
-            # 最后一块
-            chunks.append(text[start:])
-            break
+            # 寻找合适的分割点
+            split_point = self._find_split_point(text, start, end)
 
-        # 寻找合适的分割点
-        split_point = self._find_split_point(text, start, end)
+            if split_point == -1:
+                # 没找到合适的分割点，强制分割
+                split_point = end
 
-        if split_point == -1:
-            # 没找到合适的分割点，强制分割
-            split_point = end
+            chunks.append(text[start:split_point])
 
-        chunks.append(text[start:split_point])
+            # 计算下一块的开始位置（考虑重叠）
+            start = max(start + 1, split_point - self.chunk_overlap)
 
-        # 计算下一块的开始位置（考虑重叠）
-        start = max(start + 1, split_point - self.chunk_overlap)
+        return chunks
 
-    return chunks
+    def _find_split_point(self, text: str, start: int, end: int) -> int:
+        """
+        在指定范围内寻找最佳分割点
 
+        Args:
+            text: 文本
+            start: 开始位置
+            end: 结束位置
 
-def _find_split_point(self, text: str, start: int, end: int) -> int:
-    """
-    在指定范围内寻找最佳分割点
+        Returns:
+            分割点位置，-1表示未找到
+        """
+        # 从后往前寻找分隔符
+        for separator in self.separators:
+            # 在end附近寻找分隔符
+            search_start = max(start, end - 100)  # 在最后100个字符中寻找
 
-    Args:
-        text: 文本
-        start: 开始位置
-        end: 结束位置
+            for i in range(end - len(separator), search_start - 1, -1):
+                if text[i:i + len(separator)] == separator:
+                    return i + len(separator)
 
-    Returns:
-        分割点位置，-1表示未找到
-    """
-    # 从后往前寻找分隔符
-    for separator in self.separators:
-        # 在end附近寻找分隔符
-        search_start = max(start, end - 100)  # 在最后100个字符中寻找
-
-        for i in range(end - len(separator), search_start - 1, -1):
-            if text[i:i + len(separator)] == separator:
-                return i + len(separator)
-
-    return -1
+        return -1
 
 
-def merge_chunks(self, chunks: List[DocumentChunk], max_length: int = 2000) -> List[DocumentChunk]:
+def merge_chunks(chunks: List[DocumentChunk], max_length: int = 2000) -> List[DocumentChunk]:
     """
     合并小的文档块
 
@@ -194,7 +203,7 @@ def merge_chunks(self, chunks: List[DocumentChunk], max_length: int = 2000) -> L
     return merged_chunks
 
 
-def filter_chunks(self, chunks: List[DocumentChunk], min_length: int = 50) -> List[DocumentChunk]:
+def filter_chunks(chunks: List[DocumentChunk], min_length: int = 50) -> List[DocumentChunk]:
     """
     过滤太短的文档块
 
@@ -208,7 +217,7 @@ def filter_chunks(self, chunks: List[DocumentChunk], min_length: int = 50) -> Li
     return [chunk for chunk in chunks if len(chunk.content.strip()) >= min_length]
 
 
-def add_chunk_metadata(self, chunks: List[DocumentChunk], metadata: Dict[str, Any]) -> List[DocumentChunk]:
+def add_chunk_metadata(chunks: List[DocumentChunk], metadata: Dict[str, Any]) -> List[DocumentChunk]:
     """
     为文档块添加额外元数据
 

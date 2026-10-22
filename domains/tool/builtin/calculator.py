@@ -57,8 +57,11 @@ class CalculatorTool(Tool):
         """
         # 支持两种参数格式：input 和 expression
         expression = parameters.get("input", "") or parameters.get("expression", "")
-        if not expression:
+        # strip 后判空：纯空白输入同样属于「没有表达式」，
+        # 否则会把 Python 的 SyntaxError 文本（unexpected indent）抛给用户
+        if not isinstance(expression, str) or not expression.strip():
             return "错误：计算表达式不能为空"
+        expression = expression.strip()
 
         print(f"🧮 正在计算: {expression}")
 
@@ -69,8 +72,17 @@ class CalculatorTool(Tool):
             result_str = str(result)
             print(f"✅ 计算结果: {result_str}")
             return result_str
+        except SyntaxError:
+            # 语法错误只说「表达式无法解析」，不把 Python 的
+            # unexpected indent / invalid syntax 等底层文本透给用户
+            return "错误：计算表达式语法无法解析，请检查表达式格式"
+        except ZeroDivisionError:
+            return "错误：除数不能为零"
+        except (TypeError, ValueError) as exc:
+            return f"错误：表达式无法计算（{type(exc).__name__}）"
         except Exception as e:
-            error_msg = f"计算失败: {str(e)}"
+            # 兜底：仍不透传原始异常文本，避免泄漏内部实现细节
+            error_msg = f"计算失败: {type(e).__name__}"
             print(f"❌ {error_msg}")
             return error_msg
 

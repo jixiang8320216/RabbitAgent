@@ -13,8 +13,21 @@
 # 惰性导出映射：导出名 -> 定义所在模块
 _LAZY = {
     "ConfigManagerProtocol": "domains.configuration.domain.protocol.config_protocol",
-    "ProjectLayout": "domains.configuration.domain.protocol.project_layout",
-    "project_layout": "domains.configuration.domain.protocol.project_layout",}
+    "ProjectLayout": "domains.configuration.domain.protocol.project_layout_impl",
+    "project_layout": "domains.configuration.domain.protocol.project_layout_impl",}
+
+
+# ---------------------------------------------------------------------------
+# 关于 ``project_layout``：子模块刻意不叫这个名字
+# ---------------------------------------------------------------------------
+#
+# 与 ``domains/persistence/infrastructure/file`` 里的 ``file_lock`` 属同一类冲突：
+# 导出名与子模块名重名时，CPython 的子模块绑定会遮蔽 PEP 562 惰性导出；而若把导出
+# 名急切绑定成函数，``import ...protocol.project_layout as m`` 又会拿到函数而非模块。
+# 两种用法对同一个名字的要求互斥，只能消除同名——实现文件改名为
+# ``project_layout_impl.py``，导出名继续由下面的惰性映射提供。
+#
+# 这类冲突已纳入 ``tools/check_architecture.py`` 的规则 4，新增即拦截。
 
 
 def __getattr__(name):

@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import pydantic
 
 from domains.llm.provider.domain import provider_identity
+import collections.abc
 import collections.abc as abc
 
 
@@ -16,7 +19,7 @@ class LLMProviderProfile(pydantic.BaseModel):
     )
 
     @classmethod
-    def from_dict(cls, data:abc.Mapping[str,object],validate:bool=True)-> LLMProviderProfile:
+    def from_dict(cls, data:collections.abc.Mapping[str,object],validate:bool=True)-> LLMProviderProfile:
         #todo
         pass
 

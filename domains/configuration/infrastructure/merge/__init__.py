@@ -34,7 +34,9 @@ _LAZY = {
     "profile_to_llm_config": "domains.configuration.infrastructure.merge.config_merger",
     "profile_to_model_info": "domains.configuration.infrastructure.merge.config_merger",
     "resolve_llm_runtime": "domains.configuration.infrastructure.merge.config_merger",
-    "resolve_memory_enabled": "domains.configuration.infrastructure.merge.memory_config_rules",}
+    "resolve_memory_enabled": "domains.configuration.infrastructure.merge.memory_config_rules",
+    "resolve_rag_enabled": "domains.configuration.infrastructure.merge.rag_config_rules",
+    "resolve_rag_settings": "domains.configuration.infrastructure.merge.rag_config_rules",}
 
 
 def __getattr__(name):

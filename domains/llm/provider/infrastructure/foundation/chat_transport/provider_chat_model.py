@@ -1,3 +1,4 @@
+import collections.abc
 import json
 
 import pydantic
@@ -129,7 +130,7 @@ class ProviderChatModelBase(chat_model.ChatModel):
         chunk_idle_timeout:int=180,
         stream: bool=True,
         ssl_verify: bool=False,
-        default_headers:abc.Mapping[str,str]|None=None,
+        default_headers:collections.abc.Mapping[str,str]|None=None,
         auth_hook: transport_contracts.AuthHook|None=None,
         model_identity_resolver: transport_contracts.ModelIdentifyResolver|None=None,
         request_attestor:provider_request_attestation.ProviderRequestAttestorProtocol|None=None,

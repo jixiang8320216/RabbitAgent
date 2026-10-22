@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections.abc
 import collections.abc as abc
 import logging
 import pathlib
@@ -134,9 +135,9 @@ class AgentTaskCompleteHookAttacher:
     def __init__(
         self,
         *,
-        session_id_resolver: abc.Callable[[], str | None] ,
-        project_home_resolver: abc.Callable[[], str | None],
-        parent_instance_resolver: abc.Callable[[], str | None],
+        session_id_resolver: collections.abc.Callable[[], str | None] ,
+        project_home_resolver: collections.abc.Callable[[], str | None],
+        parent_instance_resolver: collections.abc.Callable[[], str | None],
     ) -> None:
         self._project_home_resolver= project_home_resolver
         self._session_id_resolver = session_id_resolver

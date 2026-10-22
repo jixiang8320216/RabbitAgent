@@ -1,5 +1,6 @@
 import typing
 import logging
+import collections.abc
 import collections.abc as abc
 import pydantic
 
@@ -10,9 +11,9 @@ import domains.agent.domain.aggregates.tool_call_stream as tool_call_stream
 
 logger = logging.getLogger(__name__)
 
-type TextDeltaEmitter= abc.Callable[[str], typing.Awaitable[None]]
-type ToolDeltaEmitter= abc.Callable[[str,str,str,str,str|None,int|None,str|None], typing.Awaitable[None]]
-type TextStreamEndNotifier= abc.Callable[[], typing.Awaitable[None]]
+type TextDeltaEmitter= collections.abc.Callable[[str], typing.Awaitable[None]]
+type ToolDeltaEmitter= collections.abc.Callable[[str,str,str,str,str|None,int|None,str|None], typing.Awaitable[None]]
+type TextStreamEndNotifier= collections.abc.Callable[[], typing.Awaitable[None]]
 
 class ModelTurn(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True, extra="forbid", frozen=True, strict=True)

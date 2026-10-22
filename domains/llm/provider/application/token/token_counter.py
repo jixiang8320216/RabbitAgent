@@ -18,9 +18,12 @@ token 统计一直处于「不报错但也不工作」的状态。这里按调�
 
 from __future__ import annotations
 
+import logging
 import typing
 
 import domains.llm.provider.application.token.openai_token_counting as openai_token_counting
+
+logger = logging.getLogger(__name__)
 
 
 @typing.runtime_checkable
@@ -33,6 +36,27 @@ class MemoryTokenSink(typing.Protocol):
 
     def set_last_api_token(self, *, input_token: int, output_tokens: int) -> None:
         """接收最近一次 API 调用的 token 用量。"""
+
+
+@typing.runtime_checkable
+class BillingUsageSink(typing.Protocol):
+    """可接收「每次 API 用量」的下游（计费 / 预算）。
+
+    协议定义在**消费方**（本模块）而不在实现方（``domains.billing``）：
+    这样 llm 域不必为了记一次用量就依赖计费域，桥由装配层对接
+    （``domains.billing.application.token_usage_bridge``）。
+    """
+
+    def record_usage(
+            self,
+            *,
+            model: str,
+            prompt_tokens: int,
+            completion_tokens: int,
+            cached_tokens: int = 0,
+            scope_key: str = "",
+    ) -> float | None:
+        """记录一次用量，返回本次成本；无法定价时返回 ``None``。"""
 
 
 class TokenCounter:
@@ -53,6 +77,9 @@ class TokenCounter:
 
         # 已登记的记忆 sink（按 agent 维度）
         self._agent_memoried: dict[str, MemoryTokenSink] = {}
+        # 计费 / 预算 sink：登记后每次真实用量都会推给它（此前 billing 域没有
+        # 任何数据来源，BudgetTracker 是孤岛）。
+        self._billing_sink: BillingUsageSink | None = None
 
         #: 最近一次 set_api_tokens 的 agent 名，供简化入口使用
         self._last_agent_name: str = ""
@@ -127,6 +154,55 @@ class TokenCounter:
                     input_token=int(prompt_tokens),
                     output_tokens=int(completed_tokens),
                 )
+
+        # 推给计费 sink（旁路：失败只记日志，不影响计数与主链路）
+        self._push_billing_usage(
+            agent_name=agent_name,
+            prompt_tokens=int(prompt_tokens),
+            completion_tokens=int(completed_tokens),
+            cached_tokens=int(cached_tokens),
+        )
+
+    def _push_billing_usage(
+            self,
+            *,
+            agent_name: str,
+            prompt_tokens: int,
+            completion_tokens: int,
+            cached_tokens: int,
+    ) -> None:
+        """把一次用量推给计费 sink。
+
+        异常只记 debug：成本统计不该让一次调用失败。**唯一例外**是调用方显式
+        选择「超预算即抛」时 sink 抛的 ``BudgetExceededError`` —— 那是有约定的
+        控制信号，必须原样向上抛，否则这条策略在链路里等于失效。
+
+        判定用类型名而不是 ``isinstance``：llm 域不该为了识别一种异常就依赖
+        billing 域的具体类型（会形成跨域的编译期依赖）。这是一个**刻意**的折中，
+        代价是重名类型会误判——本工程内 ``BudgetExceededError`` 只有一处定义。
+        """
+        sink = self._billing_sink
+        if sink is None:
+            return
+        record = getattr(sink, "record_usage", None)
+        if record is None:
+            return
+        try:
+            record(
+                model=self.model_name,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cached_tokens=cached_tokens,
+                scope_key=agent_name,
+            )
+        except Exception as exc:  # noqa: BLE001 - 计费是旁路能力
+            if type(exc).__name__ == "BudgetExceededError":
+                raise
+            logger.debug("billing sink rejected usage: %s", exc)
+
+    def register_billing_sink(self, sink: BillingUsageSink | None) -> None:
+        """登记计费 sink；传 ``None`` 表示解绑。"""
+        self._billing_sink = sink
 
     def set_last_api_token(self, *, input_token: int, output_tokens: int) -> None:
         """记录最近一次 API 用量（不带 agent 维度的简化入口）。

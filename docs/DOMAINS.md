@@ -147,7 +147,7 @@ domains/llm/provider/
 |---|---|
 | `domain/model/` | `app_config.py`、`app_mode.py`、`llm_config.py` |
 | `domain/runtime_state/` | `app_state.py`、`prompt_expansion.py` |
-| `domain/protocol/` | `project_layout.py` |
+| `domain/protocol/` | `project_layout_impl.py` |
 | `infrastructure/store/` | `user_config_store.py`、`project_config_store.py` |
 | `infrastructure/merge/` | `config_merger.py` |
 | `infrastructure/adapter/` | `app_mode_resolver.py` |

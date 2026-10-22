@@ -1,5 +1,5 @@
+import collections.abc
 import typing
-import abc
 
 class ProviderAuthResult(typing.TypedDict, total=False):
 
@@ -8,4 +8,6 @@ class ProviderAuthResult(typing.TypedDict, total=False):
     principal_environment: str
     principal_revision: int
 
-type ProviderAuthHook=abc.Callable[[],abc.Awaitable[ProviderAuthResult]]
+# ``Awaitable`` 来自 ``collections.abc``；标准库 ``abc`` 模块没有这个属性，
+# 写成 ``abc.Awaitable`` 会在导入期直接抛 AttributeError。
+type ProviderAuthHook=collections.abc.Callable[[],collections.abc.Awaitable[ProviderAuthResult]]

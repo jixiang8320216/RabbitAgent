@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import typing
 import pathlib
 import logging
@@ -8,7 +10,7 @@ from domains.configuration.domain.model import app_config as application_configu
 import domains.configuration.domain.protocol.config_protocol as config_protocol
 import domains.plugin.application.plugin_manager as plugin_runtime_module
 import domains.agent.application.registry.model_registry as mode_registry_module
-import domains.configuration.domain.protocol.project_layout as project_layout_module
+import domains.configuration.domain.protocol.project_layout_impl as project_layout_module
 import domains.configuration.domain.model.llm_config as llm_config_module
 
 JsonObject = llm_config_module.JsonObject

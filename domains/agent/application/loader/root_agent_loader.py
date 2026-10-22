@@ -2,14 +2,16 @@
 
 加载顺序（命中即止）：
 
-1. 模式声明（``mode_registry.get(mode)`` -> ``ModeDeclaration``）里
+1. 模式声明（``mode_registry.get(mode)`` -> ``RegisteredMode`` 包装，
+   其属性转发自内部 ``ModeDeclaration``）里
    ``root_agent`` 指名的槽位 -> 该槽位的 ``system_prompt_file``；
 2. ``<config_dir>/<mode>.md`` / ``.txt`` —— 模式专属提示词；
 3. ``<config_dir>/root.md`` / ``root_agent.md`` / ``planner.md`` / ``plan.md``；
 4. 内置兜底提示词（+ 项目系统提示词追加）。
 
-注意：``ModelRegistry.get()`` 直接返回 ``ModeDeclaration`` 本身（注册表内部
-已经做过归一），因此**没有** ``.declaration`` 这一层包装。
+注意：``ModelRegistry.get()`` 返回 ``RegisteredMode`` 包装对象，它通过
+``__getattr__`` 把属性转发给内部 ``ModeDeclaration``，因此**既**可以直接当声明
+使用，**也**可以通过 ``.declaration`` 取到原始声明。
 
 任一环节因依赖缺失而失败时继续走下一级；只有宿主依赖（``config_manager`` /
 ``mode_registry``）整体缺失才返回 ``None``——根 agent 缺失由上层决定如何提示，
@@ -79,7 +81,9 @@ class RootAgentLoader:
 
         # 1) 模式声明里根槽位指定的提示词文件
         if declaration is not None:
-            # ModelRegistry.get() 直接返回 ModeDeclaration（无 .declaration 包装）
+            # ``ModelRegistry.get()`` 返回 ``RegisteredMode`` 包装对象，它通过
+            # ``__getattr__`` 把属性转发给内部 ``ModeDeclaration``，
+            # 因此这里按声明使用即可。
             root_slot = self._root_slot(declaration)
             prompt_file = str(getattr(root_slot, "system_prompt_file", "") or "")
             if prompt_file:

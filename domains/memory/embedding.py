@@ -103,36 +103,63 @@ class LocalTransformerEmbedding(EmbeddingModel):
          return int(self._dimension or 0)
 
 class TFIDFEmbedding(EmbeddingModel):
-    """TF-IDF 简易兜底（在无深度模型时保证可用）"""
+    """TF-IDF 简易兜底（在无深度模型时保证可用）。
+
+    三个关键修正（原先这个兜底在离线环境实际是不可用的）：
+
+    1. **未 fit 不再抛异常**。原 ``encode`` 在 ``_is_fitted=False`` 时直接
+       ``raise ValueError``，而工厂链 ``dashscope -> local -> tfidf`` 从不会
+       调用 ``fit()``，于是「本地无模型 + 无 API Key」时唯一剩下的兜底
+       必然失败。
+    2. **分词支持中文**。``stop_words='english'`` 对中文没有意义，且默认
+       词级切分会把整段中文当成一个 token，导致相似度恒为 0。
+       改用 ``analyzer='char_wb'`` 的字符 n-gram，对中英文都可用。
+    3. **维度固定**（关键）。原先用 ``TfidfVectorizer``，实际维度等于
+       **语料里出现过的特征数**——一段短文本 fit 出来可能只有 10 维，
+       而 ``dimension`` 属性此时仍报 ``max_features``（1000）。于是
+       「建 Qdrant 集合」按 1000 维建、「实际写入的向量」只有 26 维，
+       全部被 ``add_vectors`` 的维度校验拒绝——**向量库静默写不进任何东西**。
+       现在改用 ``HashingVectorizer``：无状态、维度恒为 ``max_features``，
+       跨语料稳定，这才符合「向量维度必须可预期」的要求。
+    """
 
     def __init__(self, max_features: int = 1000):
         self.max_features = max_features
         self._vectorizer = None
-        self._is_fitted = False
+        self._is_fitted = True  # HashingVectorizer 无需训练
         self._dimension = max_features
         self._init_vectorizer()
 
     def _init_vectorizer(self):
         try:
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            self._vectorizer = TfidfVectorizer(max_features=self.max_features, stop_words='english')
+            from sklearn.feature_extraction.text import HashingVectorizer
+            # HashingVectorizer：无状态哈希编码，输出维度恒为 n_features，
+            # 不需要 fit，也不会因语料变化而改变维度。
+            # analyzer='char_wb'：字符 n-gram，中英文通用。
+            self._vectorizer = HashingVectorizer(
+                n_features=self.max_features,
+                analyzer="char_wb",
+                ngram_range=(1, 2),
+                lowercase=True,
+                norm="l2",
+                alternate_sign=False,
+            )
         except ImportError:
             raise ImportError("请安装 scikit-learn: pip install scikit-learn")
 
     def fit(self, texts: List[str]):
-        self._vectorizer.fit(texts)
+        """兼容接口。HashingVectorizer 无需训练，此处仅保持调用方契约。"""
         self._is_fitted = True
-        self._dimension = len(self._vectorizer.get_feature_names_out())
+        return self
 
     def encode(self, texts: Union[str, List[str]]):
-        if not self._is_fitted:
-            raise ValueError("TF-IDF模型未训练，请先调用fit()方法")
         if isinstance(texts, str):
-            texts = [texts]
+            inputs = [texts]
             single = True
         else:
+            inputs = list(texts)
             single = False
-        tfidf_matrix = self._vectorizer.transform(texts)
+        tfidf_matrix = self._vectorizer.transform(inputs)
         embeddings = tfidf_matrix.toarray()
         if single:
             return embeddings[0]
@@ -241,7 +268,16 @@ def create_embedding_model(model_type: str = "local", **kwargs) -> EmbeddingMode
 
 
 def create_embedding_model_with_fallback(preferred_type: str = "dashscope", **kwargs) -> EmbeddingModel:
-    """带回退的创建：dashscope -> local -> tfidf"""
+    """带回退的创建：dashscope -> local -> tfidf
+
+    每一档的 kwargs 会被**按该实现实际接受的参数**过滤后再传入。
+    原实现把同一份 kwargs 原样传给所有档位，而各实现的构造签名并不一致
+    （``TFIDFEmbedding`` 只吃 ``max_features``，``LocalTransformerEmbedding`` /
+    ``DashScopeEmbedding`` 只吃 ``model_name``/``api_key``/``base_url``），
+    于是「给 tfidf 传 model_name」会抛 TypeError —— TypeError 不属于
+    「模型不可用」，却被这里的 ``except Exception`` 一起吞掉，结果
+    **连最后一道纯本地兜底也被跳过**，最终抛「所有嵌入模型都不可用」。
+    """
     if preferred_type in ("sentence_transformer", "huggingface"):
         preferred_type = "local"
     fallback = ["dashscope", "local", "tfidf"]
@@ -249,9 +285,24 @@ def create_embedding_model_with_fallback(preferred_type: str = "dashscope", **kw
     if preferred_type in fallback:
         fallback.remove(preferred_type)
         fallback.insert(0, preferred_type)
+    # 显式指定 tfidf 时不再尝试 dashscope / local：
+    # dashscope 需要网络与 API Key，local 需要下载模型权重，
+    # 两者在离线环境都会失败并拖慢启动（local 甚至会先尝试联网下载）。
+    # 用户显式指定了实现，就应当尊重它。
+    if preferred_type == "tfidf":
+        fallback = ["tfidf"]
+
+    # 各实现真正接受的构造参数
+    accepted = {
+        "dashscope": ("model_name", "api_key", "base_url"),
+        "local": ("model_name",),
+        "tfidf": ("max_features",),
+    }
+
     for t in fallback:
         try:
-            return create_embedding_model(t, **kwargs)
+            filtered = {k: v for k, v in kwargs.items() if k in accepted.get(t, ())}
+            return create_embedding_model(t, **filtered)
         except Exception:
             continue
     raise RuntimeError("所有嵌入模型都不可用，请安装依赖或检查配置")
@@ -271,7 +322,10 @@ def _build_embedder() -> EmbeddingModel:
     default_model = "text-embedding-v3" if preferred == "dashscope" else "sentence-transformers/all-MiniLM-L6-v2"
     model_name = os.getenv("EMBED_MODEL_NAME", default_model).strip()
     kwargs = {}
-    if model_name:
+    # 只有需要「模型名」的实现才接收 model_name；
+    # tfidf 档位只认 max_features，传入 model_name 会让它构造失败
+    # （进而被回退链跳过，见 create_embedding_model_with_fallback 的说明）。
+    if model_name and preferred != "tfidf":
         kwargs["model_name"] = model_name
     # 仅使用统一命名
     api_key = os.getenv("EMBED_API_KEY")

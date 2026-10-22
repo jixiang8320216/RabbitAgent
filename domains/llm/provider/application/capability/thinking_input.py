@@ -65,7 +65,7 @@ def _append_assistant(
         parts.message_history.append(f"[Assistant]: {_truncate(text_content,500)}")
 
 
-def  _text_content(content:pydantic.JsonObject|None)->str:
+def  _text_content(content:pydantic.JsonValue|None)->str:
     if isinstance(content,str):
         return content
     if not isinstance(content,list):

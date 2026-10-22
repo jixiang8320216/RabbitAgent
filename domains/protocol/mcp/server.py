@@ -6,13 +6,11 @@ fastmcp 是一个快速创建 MCP 服务器的 Python 库。
 """
 
 from typing import Dict, Any, List, Optional, Callable
-try:
-    from fastmcp import FastMCP
-except ImportError:
-    raise ImportError(
-        "fastmcp is required for MCP server functionality. "
-        "Install it with: pip install fastmcp"
-    )
+
+# fastmcp 是可选第三方依赖：未安装时让解释器抛出原生的 ModuleNotFoundError，
+# 与本项目其他可选依赖（textual / prompt_toolkit / dotenv 等）保持一致——
+# 验证套件将 ModuleNotFoundError 视为「依赖缺失」而非代码缺陷。
+from fastmcp import FastMCP
 
 
 class MCPServer:

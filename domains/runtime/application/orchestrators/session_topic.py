@@ -124,7 +124,7 @@ class SessionTopicApplication(typing.Protocol):
 
 class TopicSeed(BaseModel):
 
-    model_config = ConfigDict(extra="forbid", forzen=True,strict= True)
+    model_config = ConfigDict(extra="forbid", frozen=True,strict= True)
     content:str =Field(min_length=1)
 
     def to_message(self)->TopicMessage:

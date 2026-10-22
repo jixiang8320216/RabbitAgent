@@ -10,6 +10,7 @@
 """
 import inspect
 import typing
+import collections.abc
 import collections.abc as abc
 import asyncio
 import httpx
@@ -42,12 +43,12 @@ class AuthHookProjection(pydantic.BaseModel):
     principal_revision:int|None=pydantic.Field(default=None,ge=1)
 
 # 无参、异步、返回 ProviderAuthResult（api_key_id / headers / principal_*）
-type AuthHook = abc.Callable[[], abc.Awaitable[object]]
+type AuthHook = collections.abc.Callable[[], abc.Awaitable[object]]
 
 # (model_name) -> 后端 model id
-type ModelIdentifyResolver = abc.Callable[[str,str,str|None,int|None,str|None], abc.Awaitable[str]]
+type ModelIdentifyResolver = collections.abc.Callable[[str,str,str|None,int|None,str|None], abc.Awaitable[str]]
 
-type AsyncProviderCall = abc.Callable[..., abc.Awaitable[object]]
+type AsyncProviderCall = collections.abc.Callable[..., abc.Awaitable[object]]
 
 class AsyncProviderClientPort(typing.Protocol):
     def close(self) -> abc.Awaitable[None]|None:...
@@ -125,7 +126,7 @@ def chat_response_has_business_output(response:chat_contracts.ChatResponse|None)
     return False
 
 # 请求发出前的最后一道改写：(headers, payload) -> (headers, payload)
-type RequestTransformer = abc.Callable[[JsonObject, JsonObject], tuple[JsonObject, JsonObject]]
+type RequestTransformer = collections.abc.Callable[[JsonObject, JsonObject], tuple[JsonObject, JsonObject]]
 
 
 

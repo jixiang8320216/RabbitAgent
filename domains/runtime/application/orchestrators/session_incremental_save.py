@@ -1,9 +1,10 @@
 
-import abc
+import collections.abc
+import collections.abc as abc
 import asyncio
 class SessionIncrementalSaveCoordinator:
 
-    def __init__(self,save_operation:abc.Callable[[str],abc.Awaitable[None]]):
+    def __init__(self,save_operation:collections.abc.Callable[[str],abc.Awaitable[None]]):
         self._save_operation = save_operation
         self._requested_generation=0
         self._settled_genration=0

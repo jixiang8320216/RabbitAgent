@@ -16,7 +16,7 @@ class _MigrationModel(BaseModel):
     model_config= ConfigDict(extra="forbid")
 
 class SourceFile(_MigrationModel):
-    model_config = ConfigDict(extra="forbid",forzen=True)
+    model_config = ConfigDict(extra="forbid",frozen=True)
     path: Path
     kind:FlatSourceKind
     app_id: str

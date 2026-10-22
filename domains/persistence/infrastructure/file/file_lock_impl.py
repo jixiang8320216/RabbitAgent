@@ -1,5 +1,6 @@
 import pathlib
 import contextlib
+import collections.abc
 import collections.abc as abc
 import os
 import time
@@ -20,7 +21,7 @@ def file_lock(
         *,
     timeout_seconds: float = file_lock_policy.DEFAULT_FILE_LOCK_TIMEOUT_SECONDS,
     timeout: float | None = None,
-)-> abc.Iterator[None]:
+)-> collections.abc.Iterator[None]:
     """Acquire an inter-process lock represented by an atomically-created file."""
     if timeout is not None:
         timeout_seconds = timeout

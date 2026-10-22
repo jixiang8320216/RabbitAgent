@@ -70,20 +70,20 @@ class ExplicitAgentLoader:
            readiness =record.readiness,
         )
 
-def _resolved_names(binding:expert_models.ExpertResourceBinding)->list[str]|None:
-    if binding.mode is expert_models.ExpertResourceBinding.MANUAL:
+def _resolved_names(binding:expert_models.ExpertResourceBing)->list[str]|None:
+    if binding.model is expert_models.ExperResourcesBingMode.MANUAL:
         return list(binding.names)
     return None
 
-def _resolved_agent_names(binding:expert_models.ExpertResourceBinding)->list[str]:
-    if binding.mode is not expert_models.ExpertResourceBinding.MANUAL:
+def _resolved_agent_names(binding:expert_models.ExpertResourceBing)->list[str]:
+    if binding.model is not expert_models.ExperResourcesBingMode.MANUAL:
         return []
     if binding.expert_refs:
-        return[reference.dispaly_name for reference in binding.expert_refs]
+        return[reference.display_name for reference in binding.expert_refs]
     return list(binding.names)
 
-def _resolved_agent_ids(binding:expert_models.ExpertResourceBinding)->list[str]:
-    if binding.mode is not expert_models.ExpertResourceBinding.MANUAL:
+def _resolved_agent_ids(binding:expert_models.ExpertResourceBing)->list[str]:
+    if binding.model is not expert_models.ExperResourcesBingMode.MANUAL:
         return []
     return[reference.expert_id for reference in binding.expert_refs]
 

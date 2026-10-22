@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 import types
 import typing
+import collections.abc
+import collections.abc as abc
 
 import pydantic
 
@@ -36,6 +38,7 @@ __all__ = [
     "_AnthropicEventProjection",
     "_AnthropicEventStreamPort",
     "_AnthropicStreamManagerPort",
+    "_AnthropicStreamCall",
     "_exit_anthropic_stream_manager",
 ]
 
@@ -43,6 +46,13 @@ ChatResponse = shared_contracts.ChatResponse
 ProviderMessage = shared_contracts.ProviderMessage
 _AsyncProviderCall = shared_contracts.AsyncProviderCall
 _AsyncProviderClientPort = shared_contracts.AsyncProviderClientPort
+
+#: Anthropic ``messages.stream`` 的调用签名。
+#:
+#: 与 ``_AsyncProviderCall`` 同构：可调用、返回可等待对象。
+#: 单独具名是为了让 ``AnthropicMessagesPort.stream`` 的类型标注能表达
+#: 「流式」与「一次性」两种调用形态的差异。
+_AnthropicStreamCall = collections.abc.Callable[..., abc.Awaitable[object]]
 
 # ----------------------------------------------------------------------
 # 内容侧的形状
@@ -124,22 +134,28 @@ class _AnthropicStreamManagerPort(typing.Protocol):
 
 
 
+#: 兼容别名：部分调用点把流管理器端口称作 ``_AnthropicEventStreamManagerPort``，
+#: 与 ``_AnthropicStreamManagerPort`` 指的是同一形状（异步上下文管理器，
+#: ``__aenter__`` 返回事件流），故直接别名而非另立定义。
+_AnthropicEventStreamManagerPort = _AnthropicStreamManagerPort
+
+
 async def _exit_anthropic_stream_manager(
-    manager: _AnthropicStreamManagerPort ,
+    manager: _AnthropicStreamManagerPort,
     provider_name: str,
 ) -> None:
-     try:
+    try:
         await manager.__aexit__(None, None, None)
-     except BaseException as exc:
+    except BaseException as exc:
         logger.error(exc)
         return
 
 _chat_response_has_business_output= shared_contracts.chat_response_has_business_output
-_closer_latest_provider_client = shared_contracts.close_latest_provider_client
+_close_latest_provider_client = shared_contracts.close_latest_provider_client
 _close_provider_client = shared_contracts.close_provider_client
 _close_provider_clients= shared_contracts.close_provider_clients
 _log_observer_callback_failure = shared_contracts.log_observer_callback_failure
-_Propagate_stream_cancellation = shared_contracts.propagate_stream_cancellation
+_propagate_stream_cancellation = shared_contracts.propagate_stream_cancellation
 _provider_error_response = shared_contracts.provider_error_response
 _provider_error_status= shared_contracts.provider_error_status
 _tool_call_observer_projection= shared_contracts.tool_call_observer_projection

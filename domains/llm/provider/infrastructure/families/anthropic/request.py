@@ -106,7 +106,7 @@ class AnthropicRequestExecutor:
                     params["model"]= resolved_model_id
                     client = self._model._create_anthropic_client(request_headers=headers)
                     manager = client.beta.messages.stream(**params)
-                    stream= await manager._aenter__()
+                    stream= await manager.__aenter__()
                     entered=True
                     buffered= await self._prefetch_business_events(stream)
                 await coordinator.recovered()
@@ -461,7 +461,7 @@ class AnthropicRequestExecutor:
                 cached_tokens=cached_tokens,
             )
         except Exception as exc:
-            native_transport._log_obsever_callback_failure(
+            native_transport._log_observer_callback_failure(
                 "on_llm_complete",
                 self._model.model_name,
                 exc,

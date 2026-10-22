@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+import collections.abc
 import collections.abc as abc
 from domains.memory.domain.memory_entry import MemoryScope, MemoryStatus, MemoryType
 import domains.memory.domain.memory_entry as memory_entry
@@ -41,13 +42,13 @@ class MarkdownRepository:
 		self._lock_path = self._root / ".memory.lock"
 		self._index = MarkdownMemoryIndex(self._root / "index.sqlite")
 
-	def iter_files(self) -> abc.Iterator[Path]:
+	def iter_files(self) -> collections.abc.Iterator[Path]:
 		for memory_type in sorted(memory_entry.MemoryType,key=lambda item: item.value):
 			type_directory = self._root / memory_type.value
 			if type_directory.exists():
 				yield  from sorted(type_directory.glob("*.md"))
 
-	def iter_file(self) -> abc.Iterator[Path]:
+	def iter_file(self) -> collections.abc.Iterator[Path]:
 		"""Backward-compatible singular alias for iter_files()."""
 		yield from self.iter_files()
 

@@ -1,6 +1,7 @@
 import typing
 
 from domains.llm.provider.domain import runtime_configuration
+import collections.abc
 import collections.abc as abc
 
 
@@ -14,7 +15,7 @@ class MultimodalConfigurationSource(typing.Protocol):
     )->object:
         """ Return one runtime configuration property """
 
-type ProviderMultimodalProjector= abc.Callable[
+type ProviderMultimodalProjector= collections.abc.Callable[
     [
         runtime_configuration.JsonObject,
         runtime_configuration.JsonObject,

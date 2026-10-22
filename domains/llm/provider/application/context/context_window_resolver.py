@@ -19,6 +19,7 @@ import json
 import json as json_module
 import re
 import os
+import collections.abc
 import collections.abc as abc
 import logging
 import typing
@@ -133,7 +134,7 @@ def _parse_models_dev_model(model_key:str, raw_model:object) -> tuple[tuple[str,
     identifiers = tuple(identifier for identifier in (model_key, model.id, model.name) if identifier)
     return identifiers, context_window
 
-def _iter_models_dev_models(catalog: object)->abc.Iterable[tuple[str, object]]:
+def _iter_models_dev_models(catalog: object)->collections.abc.Iterable[tuple[str, object]]:
     if not isinstance(catalog, dict):
         return
     models = catalog.get("models")
@@ -150,7 +151,7 @@ def _iter_models_dev_models(catalog: object)->abc.Iterable[tuple[str, object]]:
             continue
         yield key, value
 
-def _iter_provider_models(providers: abc.Iterable[object])->abc.Iterable[tuple[str, object]]:
+def _iter_provider_models(providers: collections.abc.Iterable[object])->collections.abc.Iterable[tuple[str, object]]:
     for provider in providers:
         if not isinstance(provider, dict):
             continue

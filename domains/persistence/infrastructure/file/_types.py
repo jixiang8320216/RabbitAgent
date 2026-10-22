@@ -2,7 +2,7 @@
 
 import typing
 from fsspec.utils import atomic_write
-import domains.persistence.infrastructure.file.file_lock as file_lock_module
+import domains.persistence.infrastructure.file.file_lock_impl as file_lock_module
 import domains.persistence.infrastructure.file.atomic_write as atomic_write
 
 

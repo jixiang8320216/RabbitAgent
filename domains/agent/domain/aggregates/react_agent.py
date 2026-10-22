@@ -1,5 +1,7 @@
 
 from __future__ import annotations
+
+import ast
 import asyncio
 import inspect
 import typing
@@ -14,8 +16,9 @@ import domains.agent.domain.aggregates.message_formatter as message_formatter
 import domains.agent.domain.aggregates.runtime_ports as runtime_ports
 import domains.agent.domain.value_objects.conversation_context as conversation_context
 import domains.agent.domain.value_objects.agent_execution as agent_execution
-import domains.agent.application.context.execution_store as agent_execution_store
+import domains.agent.domain.ports.execution_store as agent_execution_store
 import domains.agent.domain.aggregates.react_agent_reply as react_agent_reply
+import domains.agent.domain.aggregates.react_agent_streaming as react_streaming
 import domains.agent.domain.aggregates.execution_context as execution_context
 import domains.agent.domain.value_objects.runtime_context as runtime_context
 import domains.agent.domain.aggregates.runtime_bindings as runtime_bindings
@@ -27,6 +30,7 @@ from domains.agent.domain.entities import agent_transcript
 from domains.observability.application import observability_context
 import domains.agent.domain.aggregates.tool_invocation_scope as tool_invocation_scope
 import domains.agent.domain.value_objects.tool_response as tool_response_model
+from domains.observability.application.observability_context import increment_tool_call_count
 
 get_app_instance = execution_context.get_app_instance
 
@@ -40,6 +44,72 @@ import domains.hook.domain.inputs as hook_inputs
 
 
 logger = logging.getLogger("react-agent")
+
+
+
+_DEFAULT_PLANNER_PROMPTS:dict[str,str]={
+    "planner":(
+"""
+你是一个顶级的AI规划专家。 你的任务是将用户提出的复杂问题分解成一个由多个简单步骤组成的行动计划。
+请确认计划中的每个步骤都是一个独立的/可执行的子任务，并且严格按照逻辑顺序排列。
+你的输出必须是一个Python列表， 其中每个元素都是一个描述子任务的字符串。
+
+问题： {question}
+请严格按照以下格式输出你的计划
+'''python
+["步骤1","步骤2","步骤3"，...]
+'''
+"""
+    ),
+    "executor":(
+"""
+你是一位顶级的AI执行专家。你的任务时严格按照给定的计划，一步步地解决问题。
+你将收到原始问题、完整的计划、以及到目前为止已经完成的步骤和结果。
+请你专注与解决"当前步骤"， 并仅输出该步骤的最终答案，不要输出任何额外的解释或对话。
+
+# 原始问题:
+{question}
+
+# 完整计划
+{plan}
+
+# 历史步骤与结果
+{history}
+
+# 当前步骤
+{current_step}
+
+请仅输出针对"当前步骤"的回答
+"""
+    )
+}
+
+_DEFAULT_REFLECTION_PROMPTS:dict[str,str]={
+    "initial": ("""
+    请根据以下要求完成任务：
+    任务:{task}  
+    请提供一个完整/准确的回答。  
+    """),
+    "reflect": ("""
+    请仔细审查以下答案， 并找出可能的问题或改进空间：
+    # 原始任务
+    {task}
+    # 当前回答
+    {content}
+    请分析这个回答的质量，指出不足之处，并提出具体的改进建议。
+    如果回答已经很好，请回答"无需改进"。
+    """),
+    "refine": ("""
+    请根据反馈意见改进你的回答：
+    # 原始任务：
+    {task}
+    # 上一轮回答：
+    {last_attempt}
+    # 反馈
+    {feedback}
+    请提供一个改进后的回答。
+    """)
+}
 
 @typing.runtime_checkable
 class _ToolLoopConfigurationPort(typing.Protocol):
@@ -106,6 +176,12 @@ class ReActAgent:
         scheduler_resolver :runtime_ports.AgentSchedulerResolverProtocol |None=None,
         hook_agent_type:str |None=None,
         hook_agent_source_path:str |None=None,
+        tool_call_mode:typing.Literal["native","text_parse"]="native",
+        reflection_max_iterations: int=3,
+        reflection_prompts: dict[str,str]|None=None,
+        plan_prompts:dict[str,str]|None=None,
+        tool_call_listener: typing.Callable[[dict[str, typing.Any]], None]|None=None,
+        preset_type:str="react",
     )->None:
         self.name = name
         self._sys_prompt = sys_prompt
@@ -146,6 +222,25 @@ class ReActAgent:
             raise AssertionError(
                 f"ReActAgent '{self.name}' constructed without agent_context;"
             )
+        self.tool_call_mode = tool_call_mode
+        self.reflection_max_iterations= reflection_max_iterations
+        self.reflection_prompts = reflection_prompts or _DEFAULT_REFLECTION_PROMPTS
+        # 原写成 ``self.plan_runtime = plan_prompts or _DEFAULT_PLANNER_PROMPTS``：
+        # 把第 191 行注入的真实 ``PlanRuntime`` 覆盖成了一个 prompts 字典，
+        # 于是 ``_reply_impl`` 里 ``plan_runtime is None`` 永远为假、plan_solve
+        # 永不触发；且 ``self.plan_prompts`` 从未被赋值，一旦走到
+        # ``_reply_plan_solve`` 就是 ``AttributeError``。这里改为正确字段。
+        self.plan_prompts = plan_prompts or _DEFAULT_PLANNER_PROMPTS
+        self.tool_call_listener = tool_call_listener
+        # ``preset_type``：6 个独立 agent 类（SimpleAgent / FunctionCallAgent /
+        # PlanAndSolveAgent / ReflectionAgent / ToolAwareSimpleAgent / ReActAgent）
+        # 降级后的配置预设值，由 ``runtime_composition._instantiate_agent`` 从
+        # ``AgentRuntime.preset_type`` 透传而来，决定走哪条回复策略
+        # （见 ``_reply_impl`` / ``_resolve_reply_strategy``）。
+        self.preset_type = preset_type or "react"
+        # 记录「是否显式配置」，供旧启发式 fallback 判断该不该生效。
+        self._reflection_explicitly_configured = reflection_prompts is not None
+        self._plan_prompts_explicitly_configured = plan_prompts is not None
 
     def bind_tool_telemetry_emitter(self, emitter: runtime_ports.ToolTelemetryEmitterProtocol)->None:
         self.tool_telemetry_emitter = emitter
@@ -275,7 +370,17 @@ class ReActAgent:
             response_msg = await self._reply_impl(msg)
             return response_msg
         except BaseException as e:
-            reply_exception = e
+            try:
+                await self._fire_hooks(
+                    "model_error",
+                    {
+                        "msg": msg,
+                        "agent_name": self.name,
+                        "error":e,
+                    },
+                )
+            except Exception as hook_err:
+                logger.error(hook_err)
             raise
         finally:
             try:
@@ -283,8 +388,6 @@ class ReActAgent:
                     "post_reply",
                     {
                         "msg":msg,
-                        "response":response_msg,
-                        "exception":reply_exception,
                         "agent_name":self.name,
                     },
                 )
@@ -379,7 +482,75 @@ class ReActAgent:
         except Exception as exc:
             logger.error(exc)
 
+    # ``preset_type``（6 个独立 agent 类降级后的配置预设值）-> 回复策略。
+    # 这是「多类继承」改为「单类 + 配置预设」后唯一的路由表。
+    _PRESET_REPLY_STRATEGY: dict[str, str] = {
+        "react": "react",           # 原生 ReAct 主循环
+        "function_call": "react",   # 原 FunctionCallAgent：native 工具调用
+        "tool_aware": "react",      # 原 ToolAwareSimpleAgent：ReAct + 工具监听
+        "simple": "text_parse",     # 原 SimpleAgent：无 native 工具，文本标记解析
+        "plan_solve": "plan_solve", # 原 PlanAndSolveAgent：规划-执行
+        "reflection": "reflection", # 原 ReflectionAgent：反思迭代
+    }
+    # 共用 ReAct 主循环、但仍可被 ``tool_call_mode`` 单独切成文本解析的预设集
+    _REACT_FAMILY_PRESETS: frozenset[str] = frozenset(
+        {"react", "function_call", "tool_aware"}
+    )
+
+    def _resolve_reply_strategy(self, msg: message.Msg) -> str:
+        """决定本次回复走哪条策略实现。
+
+        优先级：**显式 ``preset_type``** → **``tool_call_mode``** → **旧启发式**。
+        旧的启发式（``max_iters < 0`` / ``msg.content.startswith('__plan_solve__')``）
+        保留下来只为兼容尚未升级的配置，不再是唯一入口。
+        """
+        preset = (self.preset_type or "react").strip().lower()
+        strategy = self._PRESET_REPLY_STRATEGY.get(preset)
+        if strategy is None:
+            logger.warning(
+                "未知的 preset_type=%r，回退到 react 主循环", self.preset_type,
+            )
+            preset, strategy = "react", "react"
+
+        if preset in self._REACT_FAMILY_PRESETS:
+            # ``_reply_text_parse`` 此前是死代码，没有任何入口调用它；
+            # 这里让 tool_call_mode='text_parse' 成为它的正式入口。
+            if self.tool_call_mode == "text_parse":
+                return "text_parse"
+            # ---- 旧启发式 fallback（向后兼容） ----
+            if (
+                self._reflection_explicitly_configured
+                and self.max_iters is not None
+                and self.max_iters < 0
+            ):
+                return "reflection"
+            content = getattr(msg, "content", None)
+            if (
+                self.plan_runtime is None
+                and self._plan_prompts_explicitly_configured
+                and isinstance(content, str)
+                and content.startswith("__plan_solve__")
+            ):
+                return "plan_solve"
+            return "react"
+        return strategy
+
     async def _reply_impl(self, msg: message.Msg)->message.Msg:
+        """按 ``preset_type`` 分流到具体的回复策略实现。
+
+        架构约定：``reply`` 只保留 ``pre_reply`` / ``model_error`` / ``post_reply``
+        的生命周期外壳，真正的策略主体全部下沉到这里 —— 即「用 ``_reply_*`` 的
+        内部实现替换 ``reply`` 的内部实现」。新增一种 agent 行为只需加一个
+        ``_reply_xxx`` 方法 + 在 ``_PRESET_REPLY_STRATEGY`` 登记，无需新建类。
+        """
+        strategy = self._resolve_reply_strategy(msg)
+        if strategy == "reflection":
+            return await self._reply_reflection(msg)
+        if strategy == "plan_solve":
+            return await self._reply_plan_solve(msg)
+        if strategy == "text_parse":
+            return await self._reply_text_parse(msg)
+        # 默认：ReAct 主循环（native / text_parse 两种工具调用模式）
         return await  react_agent_reply.run_react_reply(self, msg,
                                                         app_resolver= self._resolve_app_instance,
                                                         session_id_resolver= self._resolve_session_id,
@@ -869,4 +1040,330 @@ class ReActAgent:
         except Exception as exc:
             logger.error(exc)
             return None, None, session_id
+
+
+    def _parse_text_tool_calls(self,text:str)->list[dict[str, str]]:
+        """文本标记解析模式： 从自然语言中提取[TOOL_CALL: name: params] 标记
+        原SimpleAgent 用正则，原ToolAwareSimpleAgent 用状态机(支持嵌套)，这里采用状态机版本（更健壮）。
+        """
+        marker="[TOOL_CALL:"
+        calls: list[dict[str,str]]=[]
+        start=0
+        while True:
+            begin= text.find(marker, start)
+            if begin== -1:
+                break
+            tool_start = begin+len(marker)
+            colon= text.find(":", tool_start)
+            if colon == -1:
+                break
+            tool_name= text[tool_start:colon].strip()
+            body_start= colon+1
+            pos=body_start
+            depth=0
+            in_string =False
+            string_quote=""
+            while pos < len(text):
+                char= text[pos]
+                if char in {'"',"'"}:
+                    if not in_string:
+                        in_string = True
+                        string_quote = char
+                    elif char == string_quote and (pos==0 or text[pos-1]!="\\"):
+                        in_string = False
+                        string_quote=""
+                if not in_string:
+                    if char=='[':
+                        depth+=1
+                    elif char==']':
+                        if depth==0:
+                            body=text[body_start:pos].strip()
+                            original= text[begin:pos+1]
+                            calls.append({
+                                "tool_name": tool_name,
+                                "parameters":body,
+                                "original":original,
+                            })
+                            start=pos+1
+                            break
+                        else:
+                            depth-=1
+
+                    pos+=1
+                else:
+                    start=pos
+            return calls
+
+    def _parse_tool_parameters_text(self, tool_name:str, params_str:str)->dict[str,typing.Any]:
+        """解析文本模式工具参数
+        支持JSON/key=value 逗号分割、简单文本
+        """
+        import json
+        import ast as _ast
+
+        params_str= params_str.strip()
+        if not params_str:
+            return {}
+        try:
+            result= json.loads(params_str)
+            if isinstance(result,dict):
+                return result
+        except (json.JSONDecodeError, ValueError) as exc:
+            pass
+        if "=" in params_str:
+            result: dict[str, typing.Any]= {}
+            for pair in params_str.split(","):
+                pair=pair.strip()
+                if "=" in pair:
+                    k,v = pair.split("=",1)
+                    k= k.strip()
+                    v=v.strip().strip("'、'")
+                    result[k]=v
+            if result:
+                return result
+        try:
+            result= _ast.literal_eval(params_str)
+            if isinstance(result,dict):
+                return result
+        except (ValueError, SyntaxError) :
+            pass
+        return {"input": params_str}
+
+    async def _execute_text_tool_calls(self, text:str)->list[message.Msg]:
+        calls=self._parse_text_tool_calls(text)
+        if not calls:
+            return []
+
+        results: list[message.Msg]=[]
+        for call in calls:
+            tool_name= call["tool_name"]
+            params= self._parse_tool_parameters_text(tool_name, call["parameters"])
+            try:
+                 tool= self.toolkit.get_tool(tool_name) if hasattr(self.toolkit, "get_tool") else None
+                 if tool is None:
+                     result_text=f"工具{tool_name} 不存在"
+                 else:
+                     result = tool.run(params) if hasattr(tool,"run") else tool(params)
+                     result_text = f"工具{tool_name} 执行结果：\n {result}"
+
+                 #通知监听器（tool_call_listener）
+                 if self.tool_call_listener:
+                     self.tool_call_listener(
+                         {
+                             "agent_name":self.name,
+                             "tool_name": tool_name,
+                             "parse_parameters":params,
+                             "result":result_text,
+                         }
+                     )
+            except Exception as exc:
+                result_text= f"工具 {tool_name} 执行失败:{e}"
+
+            result.append(message.Msg(self.name, f"工具执行结果：\n{result_text}\n\n 请基于这些结果给出完整的回答", "user"))
+        return results
+
+
+    @staticmethod
+    def _format_prompt(template: str, **kwargs: object) -> str:
+        """渲染提示词模板，并容忍 ``{task}`` / ``{question}`` 两种命名。
+
+        ``_DEFAULT_REFLECTION_PROMPTS['initial']`` 用的是 ``{task}``，而调用点
+        原先写的是 ``prompts["initial"].format(question=task)`` —— 直接
+        ``KeyError: 'task'``，反思策略第一步就崩。这里同时注入两个别名，
+        使内置模板与用户自定义模板（可能沿用任一种命名）都能渲染。
+        """
+        merged = dict(kwargs)
+        task = merged.get("task", merged.get("question"))
+        merged.setdefault("task", task)
+        merged.setdefault("question", task)
+        return template.format(**merged)
+
+    async def _notify_text_stream_end(self) -> None:
+        """``react_streaming.collect_model_turn`` 需要的流结束回调。
+
+        ReAct 主循环里由 ``react_agent_reply`` 自己提供；这里给 text_parse /
+        plan_solve / reflection 三条策略复用同一套收集器，行为与主循环对齐。
+        """
+        try:
+            if self.model is not None and getattr(self.model, "observer", None) is not None:
+                await self.model.observer.on_text_stream_end(self.name)
+        except Exception as exc:
+            logger.error(exc)
+
+    async def _generate_turn(self, *, iteration: int = 0) -> react_streaming.ModelTurn:
+        """执行一次完整的「格式化上下文 → 调模型 → 收集成 ModelTurn」。
+
+        text_parse / plan_solve / reflection 三条策略原先各自用过时的同步签名
+        调用模型：``self.formatter.format(self._sys_prompt, self.context)``
+        —— 而 formatter 实际是 ``async def format(*, msgs)``，不 await 只会拿到
+        一个协程对象；再把它交给 ``await self.model(prompt)`` 必然失败。
+        这里统一成与 ReAct 主循环（``react_agent_reply._collect_turn``）
+        完全一致的调用范式，三条策略这才真正可运行。
+        """
+        system_message = message.Msg("system", self._sys_prompt, "system")
+        memory_messages = await self.context.get_messages()
+        formatted = await self.formatter.format(msgs=[system_message, *memory_messages])
+        tool_schema = self.toolkit.get_json_schemas() if self.toolkit else []
+        stream = await self._call_model_with_error_recovery(
+            formatted,
+            tool_schema,
+            iteration=iteration,
+        )
+        return await react_streaming.collect_model_turn(
+            stream,
+            agent_name=self.name,
+            emit_text_delta=self._emit_text_delta,
+            emit_tool_delta=self._emit_tool_call_streaming,
+            notify_text_stream_end=self._notify_text_stream_end,
+            event_logger=logger,
+        )
+
+    async def _reply_text_parse(self, msg: message.Msg)->message.Msg:
+        """文本标记解析模式（原 SimpleAgent 行为）"""
+        await self.context.add(msg)
+        max_iters = self.max_iters or 3
+        for iteration in range(max_iters):
+            await self._fire_hooks("pre_reasoning",{
+                "iteration": iteration, "agent_name": self.name,
+            })
+            turn = await self._generate_turn(iteration=iteration)
+            text = turn.full_text or ""
+            assistant_msg = message.Msg(self.name, text, "assistant")
+            # 主循环约定：post_reasoning 的 response 必须是 Msg
+            # （react_agent_reply._apply_post_reasoning_hook 会校验类型）。
+            await self._fire_hooks("post_reasoning",{
+                "response": assistant_msg,"agent_name":self.name,
+            })
+
+            tool_calls =self._parse_text_tool_calls(text)
+            if not tool_calls:
+                #无工具调用-》终局
+                await self.context.add(assistant_msg)
+                await self._fire_hooks("pre_print",{"text":text})
+                return assistant_msg
+            #有工具调用-》执行并把结果放回上下文，进入下一轮
+            await self.context.add(assistant_msg)
+            tool_results= await self._execute_text_tool_calls(text)
+            for result_msg in tool_results:
+                await self.context.add(result_msg)
+            await self._fire_hooks("post_observe",{"tool_count":len(tool_calls),"agent_name":self.name, })
+
+        #超过最大迭代-》再调一次模型做兜底总结
+        turn = await self._generate_turn(iteration=max_iters)
+        final_text= turn.full_text or ""
+        final_msg= message.Msg(self.name, final_text, "assistant")
+        await self.context.add(final_msg)
+        return final_msg
+
+    async def _reply_plan_solve(self, msg: message.Msg)->message.Msg:
+        """规划执行"""
+        import ast as _ast
+        task = msg.content
+        prompts = self.plan_prompts
+
+        #1.规划阶段
+        planner_prompt = self._format_prompt(prompts["planner"], question=task)
+        await self.context.add(message.Msg(self.name, planner_prompt, "user"))
+        plan_turn = await self._generate_turn(iteration=0)
+        plan_text = plan_turn.full_text or ""
+        #解析计划
+        try:
+            plan_str= plan_text.split("'''python")[1].split("'''")[0].strip()
+            plan= _ast.literal_eval(plan_str)
+            if not isinstance(plan,list):
+                plan=[]
+        except (ValueError, SyntaxError,IndexError) :
+            plan=[]
+
+        if not plan:
+            return message.Msg(self.name, f"规划失败，无法分解任务:{task}", "assistant")
+
+        #2. 执行阶段
+        history=""
+        final_answer=""
+        for i,step in enumerate(plan,1):
+            executor_prompt= self._format_prompt(prompts["executor"],
+                question=task,
+                plan=plan,
+                history= history if history else "无",
+                current_step=step,
+            )
+            await self.context.add(message.Msg(self.name, executor_prompt, "user"))
+            step_turn = await self._generate_turn(iteration=i)
+            step_result= step_turn.full_text or ""
+            history+=f"步骤 {i};{step}\n 结果：{step_result}\n\n"
+            final_answer+=step_result
+        return message.Msg(self.name, final_answer, "assistant")
+
+    async def _reply_reflection(self, msg:message.Msg)->message.Msg:
+        """反思迭代模式"""
+        task = msg.content
+        prompts = self.reflection_prompts
+        max_iters = self.reflection_max_iterations
+
+        #1. 初始执行
+        initial_prompt= self._format_prompt(prompts["initial"], task=task)
+        await self.context.add(message.Msg(self.name, initial_prompt, "user"))
+        initial_turn = await self._generate_turn(iteration=0)
+        last_result= initial_turn.full_text or ""
+
+        #2. 反思-优化循环
+        for i in range(max_iters):
+            reflect_prompt = self._format_prompt(prompts["reflect"],
+                task=task, content=last_result,
+            )
+            await self.context.add(message.Msg(self.name, reflect_prompt, "user"))
+            feedback_turn = await self._generate_turn(iteration=i + 1)
+            feedback = feedback_turn.full_text or ""
+
+            if "无需改进" in feedback or "no need for improvement" in feedback.lower():
+                logger.info("反思认为结果已无需改进")
+                break
+            refine_prompt = self._format_prompt(prompts["refine"],
+                task=task, last_attempt= last_result, feedback=feedback,
+            )
+            await self.context.add(message.Msg(self.name, refine_prompt, "user"))
+            refined_turn = await self._generate_turn(iteration=i + 1)
+            last_result= refined_turn.full_text or ""
+        return message.Msg(self.name, last_result, "assistant")
+
+
+# 兼容两种拼写：历史调用点用 ``ReActAgent``，部分编排器用 ``ReactAgent``（大写 A）。
+# 这里统一以 ``ReActAgent`` 为权威定义，并导出 ``ReactAgent`` 别名。
+ReactAgent = ReActAgent
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

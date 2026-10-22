@@ -27,7 +27,12 @@ import threading
 import typing
 import uuid
 
-__all__ = ["TurnCancelState", "TurnCancelScope", "new_turn_id"]
+__all__ = [
+    "TurnCancelState",
+    "TurnCancelScope",
+    "BackgroundExecutionScope",
+    "new_turn_id",
+]
 
 
 class TurnCancelState(str, enum.Enum):
@@ -83,7 +88,10 @@ class TurnCancelScope:
         if session_id is None and parent is not None:
             session_id = getattr(parent, "session_id", None)
         self._session_id = str(session_id) if session_id is not None else None
-        self._turn_id = turn_id
+        # 未显式给出 turn_id 时自动生成一个：轮次标识是 Trace / Token / 中断
+        # 归因到具体轮次的唯一依据，恒为 None 会让长程一致性无法验证。
+        # 宿主仍可在拿到真实 turn_id 后用 set_turn_id 覆盖。
+        self._turn_id = turn_id if turn_id is not None else new_turn_id()
         self._message_id = message_id
         self._parent = parent
         self._state = TurnCancelState.RUNNING
@@ -208,4 +216,44 @@ class TurnCancelScope:
         return (
             f"TurnCancelScope(session_id={self._session_id!r}, "
             f"turn_id={self._turn_id!r}, state={self._state.value!r})"
+        )
+
+
+class BackgroundExecutionScope(TurnCancelScope):
+    """后台 agent 的执行作用域。
+
+    与 :class:`TurnCancelScope` 的区别在于**生命周期**：后台 agent（spawn 出去的
+    子任务）不属于某一个 turn —— 它在主 turn 结束后仍可能继续跑。因此它的
+    父作用域是**会话级**作用域而非 turn 级，会话结束才随之终止。
+
+    为什么需要独立类型：
+        取消通道要能区分「取消这一轮对话」与「取消某个后台任务」。若复用
+        turn 作用域，用户结束当前对话会把仍在工作的后台任务一起杀掉；
+        若不区分，后台任务又无法被单独取消。
+
+    :param parent: 会话级作用域。
+    :param spawn_id: 后台 agent 的标识，用于按 id 精确寻址。
+    """
+
+    __slots__ = ("_spawn_id",)
+
+    def __init__(
+        self,
+        parent: "TurnCancelScope | None" = None,
+        *,
+        spawn_id: str | None = None,
+        session_id: typing.Any = None,
+    ) -> None:
+        super().__init__(parent, session_id=session_id)
+        self._spawn_id = spawn_id
+
+    @property
+    def spawn_id(self) -> str | None:
+        """后台 agent 的标识。"""
+        return self._spawn_id
+
+    def __repr__(self) -> str:
+        return (
+            f"BackgroundExecutionScope(session_id={self.session_id!r}, "
+            f"spawn_id={self._spawn_id!r}, state={self.state.value!r})"
         )

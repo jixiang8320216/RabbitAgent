@@ -211,7 +211,7 @@ class AgentFactory:
     def execution_store(self)->agent_execution_store.AgentExecutionStore:
         return self._execution_store
 
-    def manifest_repository(self)->agent_spawn_mainfest_repository.AgentSpawnMainfestRepository:
+    def manifest_repository(self)->agent_spawn_mainfest_repository.AgentSpawnManifestRepository:
         return self._manifest_repository
 
 

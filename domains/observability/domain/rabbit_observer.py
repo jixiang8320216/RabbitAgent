@@ -234,3 +234,8 @@ class RabbitObserver(typing.Protocol):
     async def on_hook_event(self, event_type: str, data:dict[str, pydantic.JsonValue])->None:...
 
     async def on_topic_updated(self, session_id: str,  topic:str)->None:...
+
+
+# 兼容调用点的拼写：``rabbit_application`` 用 ``RabbitObServer``（大写 S），
+# 权威定义为 ``RabbitObserver``，这里导出别名。
+RabbitObServer = RabbitObserver

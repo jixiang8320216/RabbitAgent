@@ -22,7 +22,7 @@ class OpenAIRequestExecutor:
 
     def __init__(
             self,
-            model: request_contracts.AnthropicRequestModel,
+            model: request_contracts.OpenAIRequestModel,
             *,
             interruptible_sleep: request_contracts.InterruptibleSleep,
             request_logger: logging.Logger,

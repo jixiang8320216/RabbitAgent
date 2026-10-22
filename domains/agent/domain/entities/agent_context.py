@@ -1,5 +1,6 @@
 """Agent 上下文与状态模型。
 
+import collections.abc
 这一层是「agent 在注册表里是什么身份、现在处于什么状态」的载体：
 
 - :class:`AgentStatus` —— 生命周期状态枚举；
@@ -84,7 +85,7 @@ class AgentRegistryPort(typing.Protocol):
 
     def update_wait_mode(self, agent_id:str, wait_mode: AgentWaitMode) -> bool:...
 
-    def get_children(self, parent_id:str)->abc.Sequence[AgentContext]:
+    def get_children(self, parent_id:str)->collections.abc.Sequence[AgentContext]:
         ...
 
     def get(self, agent_id: str) -> AgentContext | None:...

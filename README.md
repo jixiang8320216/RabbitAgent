@@ -180,10 +180,17 @@ RabbitAgent/
 ## 验证
 
 ```bash
-# TUI 端到端验证（11 项：装配 / 会话 / 渲染 / 真实模型问答）
+# 1) pytest 套件（三段式检索 / 8 种模式编排 / 历史压缩 / 架构守卫，共 45 例）
+python -m pytest
+
+# 2) 架构约束检查（三条依赖硬规则，违规即退出码 1，可接 CI）
+python tools/check_architecture.py
+python tools/check_architecture.py --json
+
+# 3) TUI 端到端验证（11 项：装配 / 会话 / 渲染 / 真实模型问答）
 python e2e_tui_test.py
 
-# 全模块导入检查
+# 4) 全模块导入检查
 python -c "
 import ast, pathlib
 for p in pathlib.Path('.').rglob('*.py'):
@@ -194,14 +201,36 @@ print('语法 OK')"
 
 ---
 
+## 本轮补齐的能力
+
+| 能力 | 之前 | 现在 | 代码落点 |
+|---|---|---|---|
+| **RAG 三段式检索** | 只跑到查询扩展 + 向量召回；`rerank_*` / `compress_*` / `expand_*` / `tldr_*` / `merge_snippets_grouped` **全项目零调用方** | 三段真正接起来：召回池 → 重排（交叉编码器，不可用时显式回落图信号融合）→ 邻居扩展 → 同文档片段合并 + 引用；每段去向写进 `report` | `domains/memory/rag/pipeline.py` |
+| **8 种模式差异化编排** | `guarded/pipeline/parallel/debate` 之间没有真实的行为差异，唯一能体现差别的是 `parallel_tool_calls` 这个单次请求开关 | 每种模式一条**可执行**计划：串行传染链 / 并发扇出 / 正反轮辩 / 规划-审批-执行，并据此精化槽位可见性 | `domains/runtime/application/orchestrators/mode_orchestration.py` |
+| **历史消息自动压缩** | `compressionThreshold` 无消费方、`AgentCompressionState` 是 0 字节空壳，压缩只作用于系统提示词 | 有了执行者：token 超阈值即压缩，**不切开工具调用序列**，模型摘要不可用则降级规则式，压不动就不压 | `domains/context/{domain,application}/history_compression*.py` |
+| **架构约束强制** | 三条硬规则靠 review | `tools/check_architecture.py` 可失败、可 `--json`、可进 CI；当前代码库 **0 违规** | `tools/check_architecture.py` |
+| **自动化测试** | 仅 `e2e_tui_test.py` | `tests/` + `pytest.ini`，45 例覆盖上面四项 | `tests/`、`pytest.ini` |
+| **惰性导出坏映射** | 全项目 45 条「登记了但访问才炸」 | 重指向/补齐/摘除后 **0 条** | 各 `domains/*/__init__.py` |
+| **计费链路** | `BudgetTracker` 无数据来源，billing 域是孤岛 | `TokenCounter` 每次真实用量经 `BillingUsageSink` 推给预算跟踪器；定价表不可用时不计费但继续 | `domains/billing/application/token_usage_bridge.py` |
+| **可选依赖声明** | `litellm` 等未声明，能力静默降级 | 在 `requirements.txt` 里单列「可选依赖」段并写明各自降级语义 | `requirements.txt` |
+
+---
+
 ## 已知遗留
 
 | 问题 | 说明 |
 |---|---|
-| `domains/llm` 14 条坏映射 | `AzureProvider` / `OpenAICodexProvider` 指向未迁移的 `families/azure_openai/`、`families/openai_codex/` |
-| 历史消息自动压缩缺执行者 | 有状态标记与配置项（`compressionThreshold`），但无「token 超阈值 → 压缩历史」的实现。当前压缩仅作用于**系统提示词** |
-| 44 个 0 字节空壳 | 集中在 `agent`（9）、`hook`（13）、`runtime`（8）、`plugin`（4）等域。多为迁移遗留的接口占位 |
+| Azure / OpenAI Codex provider 未实现 | 原 `AzureProvider` 等 4 条指向未迁移模块的坏映射**已摘除**；真正要支持时按 `openai_compatible` 同族形态实现后再登记 |
+| 44 个 0 字节空壳 | 集中在 `agent`（9）、`hook`（13）、`runtime`（8）、`plugin`（4）等域。多为迁移遗留的接口占位，需按调用契约逐个补齐或删除 |
 | `domains/runtime` 命名歧义 | 此处 "runtime" 指编排运行时，与被解散的旧 `runtime/`（消息模型）同名不同义 |
 | `domains/tool` 顶层散落 | `registry.py` `base.py` `chain.py` 未再分三层 |
-| 无自动化测试套件 | 仅有 `e2e_tui_test.py`；`pytest` 已列入依赖但无测试目录 |
 | `domains/permission` 部分文件双份 | `cli_strategy.py` / `interrupt_manager.py` 在根目录与 `infrastructure/` 下各有一份 |
+| 可选依赖未安装时模块不可导入 | `domains/protocol/mcp/server.py`（需 `fastmcp`）、`domains/rl/dataset/dataset_builder.py`（需 `datasets`）——惰性导出会把原因带出来，不是坏映射 |
+| Qdrant 服务端未启动 | `QdrantVectorStore` 默认连 `localhost:6333`。客户端本身（含内存模式）已验证可用，但真实服务需外部部署；连不上时写入/检索会抛错而非静默 |
+
+### 已修复的两个静默失效（本次验证发现）
+
+| 缺陷 | 表现 | 修法 |
+|---|---|---|
+| 惰性导出名与子模块同名 | `file_lock` / `project_layout` 既是导出名又是子模块名；子模块一旦被导入就遮蔽 `__getattr__`，调用方拿到模块而非函数，**进程启动即崩**（`TypeError: 'module' object is not callable`） | 实现文件改名为 `file_lock_impl.py` / `project_layout_impl.py` 消除同名；新增架构规则 4 拦截此类新增 |
+| Qdrant 客户端 API 变更 | `qdrant-client` 1.19 移除了 `client.search()`，而代码无条件调用它，异常被 `except` 吞掉后返回空列表——**RAG 检索静默返回 0 条**，不报错、无外显日志 | 按能力选择 `query_points()`（新版）/`search()`（旧版），并把 swallow 处改为 `logger.exception` 留栈 |

@@ -7,7 +7,13 @@ from pydantic import Field
 
 if TYPE_CHECKING:
     # 仅用于类型提示，运行期不导入，避免触发 memory/expert/mcp 等包的循环导入。
-    from interfaces.acp.schema import ModelInfo, SessionMode  # noqa: F401
+    # 原先这里写的是 ``from interfaces.acp.schema import ...``：定义本体早已下沉到
+    # 本域的 ``runtime_descriptors``，``interfaces.acp.schema`` 只是一层 re-export。
+    # 从领域层反向引用展示层会把依赖方向拧反（架构规则 R3），改为直接引用本体。
+    from domains.configuration.domain.model.runtime_descriptors import (  # noqa: F401
+        ModelInfo,
+        SessionMode,
+    )
 
 
 class AppConfig(pydantic.BaseModel):

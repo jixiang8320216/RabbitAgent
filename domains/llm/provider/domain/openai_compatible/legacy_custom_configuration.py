@@ -8,7 +8,7 @@ class CustomProviderConfiguration(provider_configuration_policy.ProviderConfigur
       PROVIDER_TYPE:str = "custom"
       DISPLAY_NAME:str = "Custom"
 
-      AUTH_TYPE: provider_configuration_policy.AutoType = provider_configuration_policy.AuthType.API_KEY
+      AUTH_TYPE: provider_configuration_policy.AuthType = provider_configuration_policy.AuthType.API_KEY
 
       REQUIRED_FILEDS:tuple[str,...]=("provider","modelName","baseUrl")
       HIDDEN_FIELDS:tuple[str,...]=(

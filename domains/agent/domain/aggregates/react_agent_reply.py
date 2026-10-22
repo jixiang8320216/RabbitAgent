@@ -38,6 +38,7 @@
 
 from __future__ import annotations
 
+import collections.abc
 import collections.abc as abc
 import inspect
 import logging
@@ -75,8 +76,8 @@ async def run_react_reply(
     host: react_contracts.ReactAgentRuntime,
     msg: message.Msg,
     *,
-    app_resolver: abc.Callable[[], object | None],
-    session_id_resolver: abc.Callable[[], str | None],
+    app_resolver: collections.abc.Callable[[], object | None],
+    session_id_resolver: collections.abc.Callable[[], str | None],
     event_logger: logging.Logger,
 )->message.Msg:
     return await ReactReplyOrchestrator(
@@ -108,8 +109,8 @@ class ReactReplyOrchestrator:
         self,
         host: react_contracts.ReactAgentRuntime,
         *,
-        app_resolver: abc.Callable[[], object | None],
-        session_id_resolver: abc.Callable[[], str | None],
+        app_resolver: collections.abc.Callable[[], object | None],
+        session_id_resolver: collections.abc.Callable[[], str | None],
         event_logger: logging.Logger,
     ) -> None:
         self._host = host
@@ -179,11 +180,35 @@ class ReactReplyOrchestrator:
             "assistant",
         )
 
+        if self._host.tool_call_mode =="text_parse":
+            #文本标记及学习模式（simpleAgent/ToolAwareSimpleAgent）
+            text=response.text or ""
+            tool_calls = self._host._parse_text_tool_calls(text)
+            if not tool_calls:
+                # 无工具调用-》终局
+                return await self._complete_without_tools(response, turn, iteration)
+            # 有工具调用-》执行
+            tool_results = await self._host._execute_text_tool_calls(text)
+            for result_msg in tool_results:
+                await self._host_context.add(result_msg)
+
+            return None #继续下一轮
+        else:
+            #原生 tool_use块模式
+            #
+            # 此前写的是 ``response.tool_use_blocks``——项目里 ``Msg`` 没有这个
+            # 属性（那是 Anthropic 原生块的命名），取属性直接抛
+            # ``AttributeError: 'Msg' object has no attribute 'tool_use_blocks'``。
+            # 本项目统一的取法是 ``get_content_blocks("tool_use")``。
+            tool_use_blocks = response.get_content_blocks("tool_use")
+            if not tool_use_blocks:
+                return await self._complete_without_tools(response, turn, iteration)
+
         self._persist_assistant_response(response, iteration)
         response = await self._apply_post_reasoning_hook(response)
         tool_uses = response.get_content_blocks("tool_use")
         if not tool_uses:
-            return await self._complete_without_tools(response, turn,iteration)
+            return await self._complete_without_tools(response, turn, iteration)
         malformed_results, dispatchabled_tools = _partition_malformed_tools(
             self._host.name,
             list(tool_uses),

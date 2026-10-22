@@ -1,4 +1,6 @@
 
+from __future__ import annotations
+
 from enum import StrEnum
 
 from domains.llm.provider.domain.openai_app_protocol import OpenAIAPIProtocol

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pydantic
 import typing
 import datetime as datetime_module

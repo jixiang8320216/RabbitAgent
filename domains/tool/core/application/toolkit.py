@@ -43,14 +43,70 @@ class ToolGroup:
     notes: str | None = None
 
 
+#: 字符串注解名 -> JSON Schema type。
+#:
+#: 模块普遍启用 ``from __future__ import annotations``，此时
+#: ``inspect.signature`` 返回的注解是字符串而非类型对象，身份比较恒不成立。
+#: 这些名字无法在运行时求值（``list[str]`` 之类），只能按名字推断。
+_STRING_ANNOTATION_TYPES: dict[str, str] = {
+    "str": "string",
+    "bool": "boolean",
+    "int": "number",
+    "float": "number",
+    "complex": "number",
+    "list": "array",
+    "tuple": "array",
+    "set": "array",
+    "frozenset": "array",
+    "Sequence": "array",
+    "Iterable": "array",
+    "dict": "object",
+    "Mapping": "object",
+    "MutableMapping": "object",
+    "Any": "string",
+    "None": "null",
+}
+
+
+def _json_type_from_name(name: str) -> str | None:
+    """按字符串注解的基名推断 JSON Schema type。
+
+    ``"list[str]"`` / ``"typing.Optional[int]"`` 这类带参数的写法都取基名。
+    """
+    base = name.strip().split("[", 1)[0].strip()
+    # 去掉 typing. / collections.abc. 前缀
+    for prefix in ("typing.", "collections.abc.", "abc."):
+        if base.startswith(prefix):
+            base = base[len(prefix):]
+            break
+    base = base.rsplit(".", 1)[-1]
+    # Optional[X] / Union[...] 取第一个非 None 分支
+    for wrapper in ("Optional[", "Union["):
+        if base.startswith(wrapper):
+            inner = name.strip()[name.strip().index("[") + 1:].rsplit("]", 1)[0]
+            for part in inner.split(","):
+                candidate = _json_type_from_name(part)
+                if candidate and candidate != "null":
+                    return candidate
+            return "string"
+    return _STRING_ANNOTATION_TYPES.get(base)
+
+
 def _json_type(annotation: object) -> str:
     """把 Python 注解粗略映射成 JSON Schema 的 ``type``。
 
     够用即可：工具参数绝大多数是标量 / 数组 / 对象，映射不出来就按
     ``"string"``——模型侧拿到的是「提示」而不是强约束。
+
+    必须同时处理**类型对象**与**字符串注解**两种形态：本项目普遍启用
+    ``from __future__ import annotations``，此时 ``inspect.signature``
+    返回的注解是字符串（如 ``"int"``），若只做身份比较会把所有参数
+    错误地降级为 ``"string"``。
     """
     if annotation is inspect.Signature.empty or annotation is None:
         return "string"
+    if isinstance(annotation, str):
+        return _json_type_from_name(annotation) or "string"
     if annotation is str:
         return "string"
     if annotation is bool:
@@ -68,6 +124,15 @@ def _json_type(annotation: object) -> str:
         return "object"
     if origin is typing.Union or origin is getattr(collections.abc, "Union", None):
         return "string"
+    # pydantic / typing 在运行时把 Optional[X] 归一为 X | None，落到这里
+    args = typing.get_args(annotation)
+    if args:
+        for arg in args:
+            if arg is type(None):
+                continue
+            mapped = _json_type(arg)
+            if mapped != "string":
+                return mapped
     return "string"
 
 

@@ -179,6 +179,20 @@ def get_tool_call_count() -> int:
     return _tool_call_count.get()
 
 
+def reset_agent_invoke_count() -> int:
+    """把 agent 调用计数清零并返回清零后的值（通常是 ``0``）。
+
+    ``domains/observability/__init__.py`` 的导出表里早就登记了这个名字，但本模块
+    此前没有它——登记了一个不存在的导出，调用方只有在
+    ``from domains.observability import reset_agent_invoke_count`` 那一刻才会
+    ``AttributeError``。与其删掉这条导出，不如把它补上：计数是本模块自己的状态，
+    清零是对同一状态的合法操作，放在这里比让调用方去 ``reset_query_stats()``
+    （那会连开始时间一起清掉）语义更准。
+    """
+    _agent_invoke_count.set(0)
+    return _agent_invoke_count.get()
+
+
 def reset_query_stats() -> None:
     """清空上一轮的查询统计，准备新一轮。"""
     _query_start_time.set(None)
@@ -201,6 +215,7 @@ __all__ = [
     "get_trace_id",
     "increment_agent_invoke_count",
     "increment_tool_call_count",
+    "reset_agent_invoke_count",
     "reset_query_stats",
     "set_app_mode",
     "set_entry_point",

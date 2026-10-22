@@ -11,7 +11,13 @@ from copy import deepcopy
 from domains.configuration.domain.model.llm_profiles import RuntimeLLMProfile
 from domains.mcp.domain.server_configuration import MCPServerConfig
 from pydantic import ConfigDict, BaseModel, InstanceOf, TypeAdapter,JsonValue
-from interfaces.acp.schema import ModelInfo, SessionMode
+# ``ModelInfo`` / ``SessionMode`` 的定义本体在配置域的 ``runtime_descriptors``；
+# ``interfaces.acp.schema`` 只是 re-export。直接引用本体，避免领域层反向依赖
+# 展示层（架构规则 R3）。拿到的仍是同一个类，行为不变。
+from domains.configuration.domain.model.runtime_descriptors import (
+    ModelInfo,
+    SessionMode,
+)
 
 from domains.configuration.domain.model.llm_profiles import RuntimeModelProfileOverride
 from domains.memory.application.memory_runtime_service import MemoryRuntimeSettings

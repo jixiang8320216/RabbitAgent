@@ -32,6 +32,11 @@ import domains.plan.application.plan_runtime as plan_runtime_module
 import domains.mcp.infrastructure.client_runtime as client_runtime
 import domains.mcp.domain.elicitation as elicitation
 import domains.agent.application as groupchat_application
+
+# 编排器在装配签名里引用 ``ProgressCallback``（见 ``agent_orchestrator``）；
+# 它即工具链进度回调类型，这里直接给出与其一致的别名，避免调用点 AttributeError。
+ProgressCallback = collections.abc.Callable[[str], collections.abc.Awaitable[None]]
+
 __all__ = [
     "AgentOrchestrationAppPort",
     "AgentOrchestratIONAppPort",
@@ -99,6 +104,7 @@ class AgentOrchestrationAppPort(typing.Protocol):
 
     role_context: role_context_module.RoleContext
     active_mode_declaration: plugin_contracts.ModeDeclaration|None
+    active_execution_plan: typing.Any|None
     current_default_agent_id: str | None
     default_agent_history: dict[str, list[session_snapshot.DefaultRecord]]
     plan_runtime: plan_runtime_module.PlanRuntime |None

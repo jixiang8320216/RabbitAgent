@@ -12,18 +12,18 @@ class ExperResourcesBingMode(str, enum.Enum):
     MANUAL="manual"
 
 class AssociatedExpertRef(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid", forzen=True, strict=True)
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True, strict=True)
     expert_id:str
     display_name:str
 
 class ExpertResourceBing(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid", forzen=True, strict=True)
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True, strict=True)
     model:ExperResourcesBingMode = ExperResourcesBingMode.AUTO
     names: tuple[str,...]=()
     expert_refs:tuple[AssociatedExpertRef,...]=()
 
 class ExpertResourceBings(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid", forzen=True, strict=True)
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True, strict=True)
 
     tools:ExpertResourceBing = pydantic.Field(default_factory=ExpertResourceBing)
     skills:ExpertResourceBing = pydantic.Field(default_factory=ExpertResourceBing)
@@ -35,14 +35,14 @@ class ExpertSkillType(str, enum.Enum):
     UTILITY="utility"
 
 class ExpertPackageMetadata(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid", forzen=True, strict=True)
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True, strict=True)
     version:str="1.0.0"
     display:dict[str,dict[str,str]]=pydantic.Field(default_factory=dict)
     category:str=""
     starter_prompts:tuple[str,...]=()
 
 class ExpertConfiguration(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid", forzen=True, strict=True)
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True, strict=True)
 
     schema_version:typing.Literal[EXPERT_SCHEMA_VERSION]= EXPERT_SCHEMA_VERSION
     expert_it:str
@@ -67,28 +67,28 @@ class ExpertReadinessStatus(str,enum.Enum):
     BLOCKED = "blocked"
 
 class ExpertReadinessDiagnostic(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid", forzen=True, strict=True)
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True, strict=True)
     code:str
     message:str
     resource_id:str|None=None
     action:str |None=None
 
 class ExpertReadiness(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid", forzen=True, strict=True)
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True, strict=True)
     status: ExpertReadinessStatus = ExpertReadinessStatus.READY
     diagnostics: tuple[ExpertReadinessDiagnostic,...]=()
 
 
 
 class ExpertResourceLock(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid",forzen=True,strict=True)
+    model_config = pydantic.ConfigDict(extra="forbid",frozen=True,strict=True)
     mcp_resource_id:str
     field:typing.Literal["env","headers"]
     key:str
     required:bool=True
 
 class ResolvedExpertConfiguration(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid",forzen=True,strict=True)
+    model_config = pydantic.ConfigDict(extra="forbid",frozen=True,strict=True)
 
     configuration: ExpertConfiguration
     prompt:str

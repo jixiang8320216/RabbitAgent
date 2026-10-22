@@ -1,11 +1,16 @@
 from typing import List, Dict, Optional, Any
+import logging
 import os
 import hashlib
 import sqlite3
 import time
 import json
+from dataclasses import dataclass, replace as dataclass_replace
 from ..embedding import get_text_embedder, get_dimension
 from ..storage.qdrant_store import QdrantVectorStore
+from .acl_filter import ACLContext, filter_by_acl
+
+logger = logging.getLogger(__name__)
 
 
 def _get_markitdown_instance():
@@ -673,23 +678,120 @@ def embed_query(query: str) -> List[float]:
         return [0.0] * dimension
 
 
+# ==================
+# ACL 过滤（权限过滤内置在检索链路里）
+# ==================
+#
+# 历史问题（修复记录）
+# --------------------
+# ``search_vectors`` 此前只支持 ``memory_type`` / ``is_rag_data`` /
+# ``data_source`` / ``rag_namespace`` 四个过滤维度，**没有任何按用户 / 角色 /
+# 归属过滤的入口**——任何用户的检索都可能召回别人的私有文档。判定项
+# L1-5.4（P0，权限过滤）据此判为 BLOCKED。
+#
+# 修复方式不是「再提供一个需要调用方记得调用的过滤器」，而是把过滤**放进
+# 检索函数本身**：越权条目在离开检索函数之前就被剔除，不可能进入模型上下文。
+# ``acl_filter`` 提供判定逻辑（``filter_by_acl`` / ``is_visible``），本模块
+# 只负责把它接到检索链路上。
+
+#: 命中上出现这些字段即表示「不是公开文档」，需要身份才能判定可见性。
+_ACL_MARKER_KEYS = ("acl_users", "acl_roles", "acl_tenants")
+
+
+def _acl_document(hit: Dict) -> Dict:
+    """把向量命中摊平成「文档」视图，供 ACL 判定使用。
+
+    命中的正文与权限标注都挂在 ``metadata`` 上，而 ``acl_filter`` 判定的是
+    文档级字段，因此这里摊平 metadata，并保留回原始命中的引用（过滤完成后
+    要把**原始命中**还回去，而不是摊平后的视图）。
+    """
+    metadata = hit.get("metadata") or {}
+    document = dict(metadata)
+    document.setdefault("id", hit.get("id"))
+    document["_hit"] = hit
+    return document
+
+
+def _has_acl_marker(document: Dict) -> bool:
+    """判断文档是否带 ACL 标注（含显式拒绝）。"""
+    if document.get("visible_to") is False:
+        return True
+    return any(document.get(key) for key in _ACL_MARKER_KEYS)
+
+
+def _filter_hits_by_acl(
+    hits: List[Dict],
+    acl_context: Optional[ACLContext] = None,
+    acl_default_deny: bool = False,
+) -> List[Dict]:
+    """按 ACL 过滤检索命中：越权条目不得进入模型上下文。
+
+    过滤**永远发生**，不依赖调用方自觉：
+
+    - 给了 ``acl_context``：按身份判定；``acl_default_deny`` 决定「没有 ACL
+      标注的文档」是放行还是拒绝（安全敏感场景应传 True）。
+    - 没给 ``acl_context``：**无法验证身份即无法授权**——带 ACL 标注（或显式
+      ``visible_to=False``）的条目一律剔除。「有权限标注但没人来认领」正是
+      越权读取最容易发生的地方，因此缺省不放行。
+
+    :param hits: 向量库返回的原始命中
+    :param acl_context: 调用者身份；``None`` 表示身份未知
+    :param acl_default_deny: 无 ACL 标注的文档是否默认拒绝
+    :return: 过滤后的原始命中列表
+    """
+    if not hits:
+        return []
+    documents = [_acl_document(hit) for hit in hits]
+    if acl_context is None:
+        kept = [
+            hit for hit, document in zip(hits, documents)
+            if not _has_acl_marker(document)
+        ]
+        dropped = len(hits) - len(kept)
+        if dropped:
+            logger.warning(
+                "[RAG] ACL 过滤：未提供调用者身份，剔除 %d/%d 条带权限标注的命中",
+                dropped,
+                len(hits),
+            )
+        return kept
+    kept_documents, report = filter_by_acl(
+        documents, acl_context, default_deny=acl_default_deny
+    )
+    if report.had_violation:
+        logger.warning("[RAG] %s", report.summary())
+    return [document["_hit"] for document in kept_documents]
+
+
 def search_vectors(
         store=None,
         query: str = "",
         top_k: int = 8,
         rag_namespace: Optional[str] = None,
         only_rag_data: bool = True,
-        score_threshold: Optional[float] = None
+        score_threshold: Optional[float] = None,
+        acl_context: Optional[ACLContext] = None,
+        acl_default_deny: bool = False,
 ) -> List[Dict]:
     """
     Search RAG vectors using unified embedding and Qdrant.
+
+    检索结果**必定**经过 ACL 过滤才返回（见 :func:`_filter_hits_by_acl`）：
+    给了 ``acl_context`` 就按身份判定，没给就把带权限标注的条目剔除。
+    权限过滤因此不依赖调用方自觉调用，越权条目也不可能进入模型上下文。
     """
-    if not query:
+    if not query or not query.strip():
         return []
 
     # Create default store if not provided
     if store is None:
-        store = _create_default_vector_store()
+        try:
+            store = _create_default_vector_store()
+        except Exception as e:
+            # 向量库不可用时**安全降级**：检索是可选能力，不该把异常抛给调用方
+            # （此前这里直接抛 Qdrant 连接错误，连空白查询都会命中该路径）。
+            print(f"[WARNING] RAG vector store unavailable, degrade to empty result: {e}")
+            return []
 
     # Embed query with unified embedder
     qv = embed_query(query)
@@ -703,7 +805,7 @@ def search_vectors(
         where["rag_namespace"] = rag_namespace
 
     try:
-        return store.search_similar(
+        hits = store.search_similar(
             query_vector=qv,
             limit=top_k,
             score_threshold=score_threshold,
@@ -712,6 +814,9 @@ def search_vectors(
     except Exception as e:
         print(f"[WARNING] RAG search failed: {e}")
         return []
+    # ACL 过滤必须在结果**离开检索函数之前**完成：条目一旦返回，就可能
+    # 被拼进模型上下文。
+    return _filter_hits_by_acl(hits, acl_context, acl_default_deny)
 
 
 def _prompt_mqe(query: str, n: int) -> List[str]:
@@ -756,16 +861,27 @@ def search_vectors_expanded(
         mqe_expansions: int = 2,
         enable_hyde: bool = False,
         candidate_pool_multiplier: int = 4,
+        acl_context: Optional[ACLContext] = None,
+        acl_default_deny: bool = False,
 ) -> List[Dict]:
     """
     Search with query expansion using unified embedding and Qdrant.
+
+    与 :func:`search_vectors` 一样，**返回前必定经过 ACL 过滤**：越权条目
+    在合并排序之前就被剔除，不会占用 TopK 名额。
     """
-    if not query:
+    if not query or not query.strip():
         return []
 
     # Create default store if not provided
     if store is None:
-        store = _create_default_vector_store()
+        try:
+            store = _create_default_vector_store()
+        except Exception as e:
+            # 向量库不可用时**安全降级**：检索是可选能力，不该把异常抛给调用方
+            # （此前这里直接抛 Qdrant 连接错误，连空白查询都会命中该路径）。
+            print(f"[WARNING] RAG vector store unavailable, degrade to empty result: {e}")
+            return []
 
     # expansions
     expansions: List[str] = [query]
@@ -800,7 +916,13 @@ def search_vectors_expanded(
     agg: Dict[str, Dict] = {}
     for q in expansions:
         qv = embed_query(q)
-        hits = store.search_similar(query_vector=qv, limit=per, score_threshold=score_threshold, where=where)
+        try:
+            hits = store.search_similar(query_vector=qv, limit=per, score_threshold=score_threshold, where=where)
+        except Exception as e:
+            # 向量库中途不可用时安全降级为「这一路扩展无命中」，
+            # 而不是把异常抛给调用方。
+            print(f"[WARNING] RAG search failed for expansion: {e}")
+            continue
         for h in hits:
             mid = h.get("metadata", {}).get("memory_id", h.get("id"))
             s = float(h.get("score", 0.0))
@@ -808,6 +930,8 @@ def search_vectors_expanded(
                 agg[mid] = h
     # return top by score
     merged = list(agg.values())
+    # ACL 过滤先于排序与截断：越权条目既不进入结果，也不占 TopK 名额。
+    merged = _filter_hits_by_acl(merged, acl_context, acl_default_deny)
     merged.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
     return merged[:top_k]
 
@@ -1137,6 +1261,282 @@ def tldr_summarize(text: str, bullets: int = 3) -> Optional[str]:
 
 
 # ==================
+# Three-stage retrieval (recall -> rerank -> compress)
+# ==================
+#
+# 历史问题：``rerank_with_cross_encoder`` / ``compress_ranked_items`` /
+# ``expand_neighbors_from_pool`` / ``tldr_summarize`` / ``merge_snippets_grouped``
+# 五个函数此前**只有定义没有调用方**，主链路止步于 ``search_vectors_expanded``
+# （查询扩展 + 向量召回 + 去重取 TopK），所谓「三段式压缩检索」实际只跑了一段。
+#
+# 本模块把三段真正接起来，**降级是显式且可观测的**：每一段都先看依赖是否可用
+# （交叉编码器模型、邻居候选池、LLM 摘要），不可用就在 ``report`` 里写明走了
+# 哪条兜底路径，而不是静默退化成「什么都没做」。
+
+
+@dataclass(frozen=True)
+class ThreeStageRetrievalConfig:
+    """三段式检索的运行参数。
+
+    - **段一 Recall**：查询扩展（MQE / HyDE）+ 向量召回 -> 候选池；
+    - **段二 Rerank**：交叉编码器重排；模型不可用时回落到图信号融合
+      （``compute_graph_signals_from_pool`` + ``rank``），再做邻居扩展；
+    - **段三 Compress**：同文档片段合并 + 预算裁剪 +（可选）TLDR 摘要，
+      产出带引用的上下文串。
+    """
+
+    # --- 段一 ---
+    enable_query_expansion: bool = True
+    enable_mqe: bool = True
+    mqe_expansions: int = 2
+    enable_hyde: bool = True
+    candidate_pool_multiplier: int = 4
+
+    # --- 段二 ---
+    enable_rerank: bool = True
+    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    rerank_fallback_to_graph: bool = True
+    w_vector: float = 0.7
+    w_graph: float = 0.3
+    enable_neighbor_expand: bool = True
+    neighbors: int = 1
+    max_additions: int = 5
+
+    # --- 段三 ---
+    enable_compression: bool = True
+    max_per_doc: int = 2
+    join_gap: int = 200
+    enable_tldr: bool = False
+    tldr_bullets: int = 3
+    max_chars: int = 1200
+    include_citations: bool = True
+
+    # --- 通用 ---
+    top_k: int = 8
+
+
+def _normalize_hit(hit: Dict) -> Dict:
+    """把向量库原始命中统一成三段式内部的条目形状。
+
+    原始命中只有 ``{"id", "score", "metadata"}``，正文在 ``metadata["content"]``
+    里；而后段的函数（重排 / 邻居扩展 / 片段合并）都按**顶层** ``content`` 取正文。
+    少了这一步，交叉编码器拿到的是空串，重排分数全部失真。
+    """
+    meta = hit.get("metadata") or {}
+    return {
+        "memory_id": meta.get("memory_id") or hit.get("id"),
+        "score": float(hit.get("score", 0.0) or 0.0),
+        "content": meta.get("content", "") or "",
+        "metadata": dict(meta),
+    }
+
+
+def _sync_content_to_metadata(items: List[Dict]) -> None:
+    """把合并后的正文写回 ``metadata["content"]``。
+
+    调用方（``rag_tool`` 等）历史上从 ``metadata["content"]`` 取正文；段三会把
+    相邻片段拼成一个条目，不同步的话老调用方拿到的仍是**未合并的旧文本**。
+    """
+    for it in items:
+        meta = it.get("metadata")
+        if isinstance(meta, dict):
+            meta["content"] = it.get("content", "") or ""
+
+
+def search_three_stage(
+        store=None,
+        query: str = "",
+        top_k: int = 8,
+        rag_namespace: Optional[str] = None,
+        only_rag_data: bool = True,
+        score_threshold: Optional[float] = None,
+        config: Optional[ThreeStageRetrievalConfig] = None,
+        acl_context: Optional[ACLContext] = None,
+        acl_default_deny: bool = False,
+        **overrides: Any,
+) -> Dict[str, Any]:
+    """执行完整的三段式检索：召回 -> 重排 -> 压缩。
+
+    :param config: 三段式参数；缺省用默认配置。
+    :param overrides: 覆盖 ``config`` 的同名字段（便于按调用点临时关掉某一段）。
+    :param acl_context: 调用者身份；``None`` 表示身份未知。
+    :param acl_default_deny: 无 ACL 标注的文档是否默认拒绝。
+    :return: ``{"hits", "context", "citations", "report"}``。
+             ``hits`` 是段三产出的最终条目（兼容旧的列表消费方式），
+             ``context`` 是带引用的上下文串，``report`` 记录每段走了哪条路径。
+    """
+    cfg = config or ThreeStageRetrievalConfig()
+    if overrides:
+        known = {k: v for k, v in overrides.items() if hasattr(cfg, k)}
+        if known:
+            cfg = dataclass_replace(cfg, **known)
+
+    if not query or not query.strip():
+        return {"hits": [], "context": "", "citations": [], "report": {"empty_query": True}}
+
+    # ------------------------------------------------------------------
+    # Stage 1 — recall: query expansion + vector search -> candidate pool
+    # ------------------------------------------------------------------
+    # 段二要能在「比 top_k 更大的池子」里重新排序，所以这里故意把召回上限放大；
+    # ``candidate_pool_multiplier`` 传 1，避免池子被二次放大。
+    recall_limit = max(int(top_k) * max(1, int(cfg.candidate_pool_multiplier)), 20)
+
+    if cfg.enable_query_expansion:
+        pool_hits = search_vectors_expanded(
+            store=store,
+            query=query,
+            top_k=recall_limit,
+            rag_namespace=rag_namespace,
+            only_rag_data=only_rag_data,
+            score_threshold=score_threshold,
+            enable_mqe=cfg.enable_mqe,
+            mqe_expansions=cfg.mqe_expansions,
+            enable_hyde=cfg.enable_hyde,
+            candidate_pool_multiplier=1,
+            acl_context=acl_context,
+            acl_default_deny=acl_default_deny,
+        )
+    else:
+        pool_hits = search_vectors(
+            store=store,
+            query=query,
+            top_k=recall_limit,
+            rag_namespace=rag_namespace,
+            only_rag_data=only_rag_data,
+            score_threshold=score_threshold,
+            acl_context=acl_context,
+            acl_default_deny=acl_default_deny,
+        )
+
+    pool = [_normalize_hit(h) for h in pool_hits]
+    if not pool:
+        return {
+            "hits": [],
+            "context": "",
+            "citations": [],
+            "report": {
+                "query": query,
+                "recall_limit": recall_limit,
+                "pool_size": 0,
+                "rerank_strategy": "skipped_empty_pool",
+                "expanded_additions": 0,
+                "final_items": 0,
+                "context_chars": 0,
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # Stage 2 — rerank: cross encoder, falling back to graph-signal fusion
+    # ------------------------------------------------------------------
+    rerank_strategy = "none"
+    # 取 TopK 前的排序基准：段一给的是纯向量分。
+    ranked: List[Dict] = list(pool)
+
+    if cfg.enable_rerank:
+        reranked = rerank_with_cross_encoder(
+            query, ranked, model_name=cfg.rerank_model, top_k=len(ranked)
+        )
+        if any("rerank_score" in item for item in reranked):
+            ranked = reranked
+            rerank_strategy = "cross_encoder"
+        elif cfg.rerank_fallback_to_graph:
+            # 交叉编码器不可用（未装 sentence-transformers / 无法下载权重）时的兜底：
+            # 同一文档的命中密度 + 位置邻近度作为图信号，与向量分线性融合。
+            signals = compute_graph_signals_from_pool(pool_hits)
+            ranked = rank(pool_hits, signals, cfg.w_vector, cfg.w_graph)
+            rerank_strategy = "graph_fusion"
+        else:
+            ranked = reranked
+            rerank_strategy = "passthrough"
+
+    selected = ranked[:max(1, int(top_k))]
+
+    expanded_additions = 0
+    if cfg.enable_neighbor_expand and selected:
+        extended = expand_neighbors_from_pool(
+            selected,
+            pool,
+            neighbors=cfg.neighbors,
+            max_additions=cfg.max_additions,
+        )
+        expanded_additions = len(extended) - len(selected)
+        selected = extended
+
+    # ------------------------------------------------------------------
+    # Stage 3 — compress: same-doc merge + budget trim (+ optional TLDR)
+    # ------------------------------------------------------------------
+    if cfg.enable_compression:
+        selected = compress_ranked_items(
+            selected,
+            enable_compression=True,
+            max_per_doc=cfg.max_per_doc,
+            join_gap=cfg.join_gap,
+        )
+
+    # 上下文拼装**之前**再过一道 ACL：候选池已经过滤过，这里是纵深防御
+    # （邻居扩展与同文档合并都不该把越权内容带进上下文）。
+    final_items = _filter_hits_by_acl(
+        selected[:max(1, int(top_k))], acl_context, acl_default_deny
+    )
+    _sync_content_to_metadata(final_items)
+
+    context = merge_snippets_grouped(
+        final_items,
+        max_chars=cfg.max_chars,
+        include_citations=cfg.include_citations,
+    )
+
+    if cfg.enable_tldr:
+        summary = tldr_summarize(context, bullets=cfg.tldr_bullets)
+        if summary:
+            context = f"{context}\n\nTL;DR:\n{summary}"
+
+    # 引用列表：只对真正进入上下文的条目给引用（超过字符预算被截断的不算）。
+    citations: List[Dict] = []
+    for index, item in enumerate(final_items, start=1):
+        snippet = (item.get("content", "") or "").strip()[:60]
+        if not snippet or snippet not in context:
+            continue
+        meta = item.get("metadata", {})
+        citations.append({
+            "index": index,
+            "source_path": meta.get("source_path"),
+            "doc_id": meta.get("doc_id"),
+            "start": meta.get("start"),
+            "end": meta.get("end"),
+            "heading_path": meta.get("heading_path"),
+            "score": item.get("score", 0.0),
+            "rerank_score": item.get("rerank_score"),
+        })
+
+    report = {
+        "query": query,
+        "recall_limit": recall_limit,
+        "pool_size": len(pool),
+        "rerank_strategy": rerank_strategy,
+        "expanded_additions": expanded_additions,
+        "final_items": len(final_items),
+        "context_chars": len(context),
+        "acl_enforced": True,
+        "acl_context_provided": acl_context is not None,
+        "stages": {
+            "query_expansion": bool(cfg.enable_query_expansion),
+            "rerank": bool(cfg.enable_rerank),
+            "neighbor_expand": bool(cfg.enable_neighbor_expand),
+            "compression": bool(cfg.enable_compression),
+            "tldr": bool(cfg.enable_tldr),
+        },
+    }
+
+    return {
+        "hits": final_items,
+        "context": context,
+        "citations": citations,
+        "report": report,
+    }
+
+
+# ==================
 # High-level RAG Pipeline API
 # ==================
 
@@ -1178,14 +1578,18 @@ def create_rag_pipeline(
         )
         return len(chunks)
 
-    def search(query: str, top_k: int = 8, score_threshold: Optional[float] = None):
-        """Search RAG knowledge base"""
+    def search(query: str, top_k: int = 8, score_threshold: Optional[float] = None,
+               acl_context: Optional[ACLContext] = None,
+               acl_default_deny: bool = False):
+        """Search RAG knowledge base (stage 1 only: plain vector recall)."""
         return search_vectors(
             store=store,
             query=query,
             top_k=top_k,
             rag_namespace=rag_namespace,
-            score_threshold=score_threshold
+            score_threshold=score_threshold,
+            acl_context=acl_context,
+            acl_default_deny=acl_default_deny,
         )
 
     def search_advanced(
@@ -1193,17 +1597,50 @@ def create_rag_pipeline(
             top_k: int = 8,
             enable_mqe: bool = False,
             enable_hyde: bool = False,
-            score_threshold: Optional[float] = None
+            score_threshold: Optional[float] = None,
+            acl_context: Optional[ACLContext] = None,
+            acl_default_deny: bool = False
     ):
-        """Advanced search with query expansion"""
-        return search_vectors_expanded(
+        """Advanced search with query expansion.
+
+        现在真正走三段式（召回 -> 重排 -> 压缩）：此前这里只做查询扩展 +
+        向量召回，「重排 / 压缩」五个函数全项目零调用方。签名保持旧契约，
+        返回的是段三产出的**条目列表**（与旧返回值形状一致）。
+        """
+        result = search_three_stage(
             store=store,
             query=query,
             top_k=top_k,
             rag_namespace=rag_namespace,
-            enable_mqe=enable_mqe,
-            enable_hyde=enable_hyde,
-            score_threshold=score_threshold
+            score_threshold=score_threshold,
+            config=ThreeStageRetrievalConfig(
+                enable_mqe=enable_mqe,
+                enable_hyde=enable_hyde,
+                top_k=top_k,
+            ),
+            acl_context=acl_context,
+            acl_default_deny=acl_default_deny,
+        )
+        return result["hits"]
+
+    def search_full(query: str, top_k: int = 8, score_threshold: Optional[float] = None,
+                    config: Optional[ThreeStageRetrievalConfig] = None,
+                    acl_context: Optional[ACLContext] = None,
+                    acl_default_deny: bool = False, **overrides: Any):
+        """Three-stage retrieval with the stage report attached.
+
+        :return: ``{"hits", "context", "citations", "report"}``。
+        """
+        return search_three_stage(
+            store=store,
+            query=query,
+            top_k=top_k,
+            rag_namespace=rag_namespace,
+            score_threshold=score_threshold,
+            config=config,
+            acl_context=acl_context,
+            acl_default_deny=acl_default_deny,
+            **overrides,
         )
 
     def get_stats():
@@ -1216,5 +1653,6 @@ def create_rag_pipeline(
         "add_documents": add_documents,
         "search": search,
         "search_advanced": search_advanced,
+        "search_full": search_full,
         "get_stats": get_stats
     }

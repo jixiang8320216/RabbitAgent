@@ -72,16 +72,25 @@ class EpisodicMemory(BaseMemory):
         self.embedder = get_text_embedder()
 
         # 向量存储（Qdrant - 使用连接管理器避免重复连接）
+        # 降级说明：Qdrant 是**可选**的加速层，SQLite 才是权威存储。
+        # 原实现在 Qdrant 不可用时直接抛错，导致整个情景记忆不可用；
+        # 现在降级为「无向量库模式」，add/retrieve 里的向量读写本来就有
+        # try/except 兜底，检索会回落到关键词匹配。
         from ..storage.qdrant_store import QdrantConnectionManager
         qdrant_url = os.getenv("QDRANT_URL")
         qdrant_api_key = os.getenv("QDRANT_API_KEY")
-        self.vector_store = QdrantConnectionManager.get_instance(
-            url=qdrant_url,
-            api_key=qdrant_api_key,
-            collection_name=os.getenv("QDRANT_COLLECTION", "hello_agents_vectors"),
-            vector_size=get_dimension(getattr(self.embedder, 'dimension', 384)),
-            distance=os.getenv("QDRANT_DISTANCE", "cosine")
-        )
+        self.vector_store = None
+        try:
+            self.vector_store = QdrantConnectionManager.get_instance(
+                url=qdrant_url,
+                api_key=qdrant_api_key,
+                collection_name=os.getenv("QDRANT_COLLECTION", "hello_agents_vectors"),
+                vector_size=get_dimension(getattr(self.embedder, 'dimension', 384)),
+                distance=os.getenv("QDRANT_DISTANCE", "cosine")
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Qdrant 不可用（{e}），情景记忆以降级模式运行："
+                           f"SQLite 权威存储正常，向量检索回落到关键词匹配")
 
     def add(self, memory_item: MemoryItem) -> str:
         """添加情景记忆"""
@@ -128,6 +137,8 @@ class EpisodicMemory(BaseMemory):
 
         # 2) 向量索引（Qdrant）
         try:
+            if self.vector_store is None:
+                raise RuntimeError("向量库不可用（降级模式）")
             embedding = self.embedder.encode(memory_item.content)
             if hasattr(embedding, "tolist"):
                 embedding = embedding.tolist()
@@ -173,6 +184,8 @@ class EpisodicMemory(BaseMemory):
 
         # 向量检索（Qdrant）
         try:
+            if self.vector_store is None:
+                raise RuntimeError("向量库不可用（降级模式）")
             query_vec = self.embedder.encode(query)
             if hasattr(query_vec, "tolist"):
                 query_vec = query_vec.tolist()
@@ -430,7 +443,14 @@ class EpisodicMemory(BaseMemory):
                 user_id=episode.user_id,
                 timestamp=episode.timestamp,
                 importance=episode.importance,
-                metadata=episode.metadata
+                # Episode 类没有 ``metadata`` 属性（它有的是 ``context``）。
+                # 原写作 ``metadata=episode.metadata`` 会抛 AttributeError，
+                # 导致 ``get_all`` 不可用，进而让 manager 的整合/统计链路断裂。
+                metadata={
+                    "session_id": episode.session_id,
+                    "context": episode.context,
+                    "outcome": episode.outcome,
+                }
             )
             memory_items.append(memory_item)
         return memory_items
@@ -473,7 +493,7 @@ class EpisodicMemory(BaseMemory):
         cache_key = f"{user_id}_{min_frequency}"
         if (cache_key in self.patterns_cache and
                 self.last_pattern_analysis and
-                (datetime.now() - self.last_pattern_analysis).hours < 1):
+                (datetime.now() - self.last_pattern_analysis).total_seconds() < 3600):
             return self.patterns_cache[cache_key]
 
         # 过滤情景

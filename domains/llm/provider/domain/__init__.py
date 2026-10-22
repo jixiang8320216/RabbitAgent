@@ -11,10 +11,13 @@
 """
 
 # 惰性导出映射：导出名 -> 定义所在模块
+# 注：Azure OpenAI / OpenAI Codex 的 provider 与 provider_configuration 此前被登记在
+# 本表里，但目标模块（``...azure_openai...`` / ``...openai_codex...``）从未迁移过来：
+# 这是一张「声明了实现、访问才报错」的坏映射。与其继续留着一颗雷，不如显式摘除——
+# 真正需要这两个 provider 时应当按 openai_compatible 同族的形态**实现后**再登记。
 _LAZY = {
     "AnthropicProviderConfiguration": "domains.llm.provider.domain.anthropic.provider_configuration",
     "AuthType": "domains.llm.provider.domain.provider_configuration_policy",
-    "AzureProviderConfiguration": "domains.llm.provider.domain.azure_openai.provider_configuration",
     "CODEAGENT_RPOVIDERS": "domains.llm.provider.domain.provider_identity",
     "CustomProviderConfiguration": "domains.llm.provider.domain.openai_compatible.legacy_custom_configuration",
     "DEFAULT_CHUNK_IDLE_TIMEOUT": "domains.llm.provider.domain.streaming_policy",
@@ -34,7 +37,6 @@ _LAZY = {
     "OPENAI_COMPATIBLE_PROFILE_PROVIDERS": "domains.llm.provider.domain.provider_identity",
     "OPENAI_COMPATIBLE_PROVIDER_NAME": "domains.llm.provider.domain.provider_identity",
     "OpenAIAPIProtocol": "domains.llm.provider.domain.openai_api_protocol",
-    "OpenAICodexProviderConfiguration": "domains.llm.provider.domain.openai_codex.provider_configuration",
     "OpenAIProviderConfiguration": "domains.llm.provider.domain.openai_compatible.provider_configuration",
     "PROVIDER_FAILURE_CAPABILITY_ERROR_MARKERS": "domains.llm.provider.domain.provider_failure_markers",
     "PROVIDER_FAILURE_RATE_LIMIT_ERROR_MARKERS": "domains.llm.provider.domain.provider_failure_markers",

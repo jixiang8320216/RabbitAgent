@@ -12,8 +12,7 @@ import domains.configuration.infrastructure.adapter.app_mode_resolver as app_mod
 from domains.runtime.application.runtime_model_config import normalize_profiles_with_stable_ids
 from domains.configuration.domain.model.llm_config import LLMConfig
 from domains.llm.provider.application.configuration.resolution import resolve_profile_proxy_configuration
-from interfaces.acp.schema import ModelInfo
-from interfaces.acp.schema import SessionMode
+from domains.configuration.domain.model.runtime_descriptors import ModelInfo, SessionMode
 from domains.permission.infrastructure.security.credential_encryption import  EncryptionService,get_encryption_service
 from domains.configuration.domain.model.mcp_server_config import  RuntimeMCPTransport,RuntimeMCPServerConfig
 from domains.resource_catalog.infrastructure.local_mcp_resources import  LocalMCPDiscoveryService

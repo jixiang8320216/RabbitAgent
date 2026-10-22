@@ -76,7 +76,11 @@ class LocalMCPDiscoveryService:
 
     def _config_paths(self) -> list[tuple[Path, MCPServerScope]]:
         user_home = Path(os.environ.get("RABBIT_USER_HOME", Path.home() / ".rabbit"))
-        system_dir = Path(__file__).resolve().parents[2] / "conf"
+        # ``domains/resource_catalog/infrastructure/local_mcp_resources.py`` 的层级：
+        # parents[0]=infrastructure, [1]=resource_catalog, [2]=domains, [3]=项目根。
+        # 此前写 ``parents[2]`` 指向 ``<项目根>/domains/conf`` —— 目录永远不存在，
+        # 系统级 MCP server 配置（SYSTEM scope）永远加载不到。
+        system_dir = Path(__file__).resolve().parents[3] / "conf"
         roots = (
             (system_dir, MCPServerScope.SYSTEM),
             (user_home, MCPServerScope.USER),

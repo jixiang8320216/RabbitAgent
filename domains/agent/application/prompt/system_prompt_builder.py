@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import inspect
 import logging
 import pathlib
@@ -11,6 +13,9 @@ import domains.agent.domain.entities.root_agent_config as root_agent_config_modu
 import domains.agent.domain.entities.agent_role as agent_role
 import domains.agent.application.prompt.skill_prompt_context as skill_prompt_context
 import domains.agent.domain.aggregates.execution_context as execution_context
+# ``InstructionMemoryType`` 在运行期就要取（``_build_global_knowledge_sections``
+# 按作用域过滤指令资源），不能只放在 ``TYPE_CHECKING`` 块里。
+import domains.hook.domain.inputs as hook_inputs
 
 if typing.TYPE_CHECKING:  # pragma: no cover - 仅用于类型标注，运行期不导入
     import domains.configuration.infrastructure.adapter.config_manager as configuration
@@ -52,11 +57,22 @@ class SystemPromptBuilder:
       拿不到时可能是 ``None``）。
     - ``current_user_request``：当前这一轮的用户请求原文。
     - ``skill_registry``：技能注册表，用于展开可用技能描述。
-    - ``rabbit_skill_md``：聚合后的技能说明 markdown。
+    - ``rabbit_skills_md``：聚合后的技能说明 markdown。
     - ``instruction_resources``：指令资源（沿用调用点既有拼写）。
 
     装配位置：``AgentFactory.__init__``。依赖全部可选——缺哪一项都只是对应的
     素材缺席，不应让构造器本身构造失败。
+
+    .. note::
+       ``skills_md`` 与 ``rabbit_skills_md`` 是同一份素材的两个拼写。
+       整条装配链（``SystemResources.rabbit_skills_md`` →
+       ``AgentOrchestrator._system_rabbit_skills_md`` →
+       ``AgentBootstrap`` → ``AgentFactory``）统一用 ``rabbit_skills_md``；
+       此前本类的形参却写成 ``skills_md``，两边对不上，
+       ``AgentFactory.__init__`` 传 ``rabbit_skills_md=`` 时直接抛
+       ``TypeError: SystemPromptBuilder.__init__() got an unexpected keyword
+       argument 'rabbit_skills_md'``，TUI 首屏都起不来。
+       现在以 ``rabbit_skills_md`` 为准，``skills_md`` 保留为兼容别名。
     """
 
     def __init__(
@@ -67,13 +83,16 @@ class SystemPromptBuilder:
         current_user_request: typing.Optional[str] = "",
         skill_registry: typing.Optional[skill_registry_module.SkillRegistry] = None,
         rabbit_skills_md: typing.Optional[str] = None,
-        instruction_resources: typing.Sequence[system_resource_module.InstructionResource],
+        skills_md: typing.Optional[str] = None,
+        instruction_resources: typing.Sequence[system_resource_module.InstructionResource]|None=None,
     ) -> None:
         self.config_manager = config_manager
         self.context_optimizer = context_optimizer
         self.current_user_request = current_user_request
         self.skill_registry = skill_registry
-        self.rabbit_skills_md = rabbit_skills_md
+        # 两个拼写指向同一份素材；以 rabbit_skills_md 为准，skills_md 仅作兼容。
+        self.rabbit_skills_md = rabbit_skills_md if rabbit_skills_md is not None else skills_md
+        self.skills_md = self.rabbit_skills_md
         self.instruction_resources = instruction_resources
 
     # ------------------------------------------------------------------
@@ -200,7 +219,7 @@ class SystemPromptBuilder:
         sub_agent: agent_runtime_module.AgentRuntime,
         project_home: typing.Optional[str] = None,
         system_config_dir: typing.Optional[pathlib.Path]|None = None,
-        optimize: bool = True,
+        optimize: bool = False,
         add_plan_instructions: bool |None=None,
         additional_sections: typing.Optional[typing.List[str]] = None,
     ) -> str:
@@ -227,9 +246,29 @@ class SystemPromptBuilder:
             try:
                 base_prompt =await self._optimize_system_prompt(sub_agent, base_prompt)
             except Exception as e:
-                logger.error(e)
+                logger.warning("[SYSTEM_PROMPT_BUILDER]Optionzation failed for %s:%s",sub_agent.name, e,exc_info=True)
         agent_kind="Mode Root" if uses_mode_prompt_file else "Configured Agent"
         return base_prompt
+
+    def build_skill_runtime_context(
+        self,
+        runtime_agent: agent_runtime_module.AgentRuntime,
+    ) -> str:
+        """技能运行时上下文：技能在磁盘上的位置，供模型按需读全文。
+
+        .. note::
+           此前本方法是**只有调用点、没有定义**的空缺：``_append_creation_context``
+           里调到它时抛 ``AttributeError``，而 ``static_environment_context``
+           的 ``_safe_provider`` 会把一切异常兜成空串——于是「技能运行时上下文」
+           永远是空的，且**没有任何日志**，静态看代码完全正常。
+
+           现在转发到 ``skill_prompt_context``——真正的渲染逻辑在那里，
+           本类只负责把 ``skill_registry`` 递过去。
+        """
+        return skill_prompt_context.build_skill_runtime_context(
+            runtime_agent,
+            self.skill_registry,
+        )
 
     # ------------------------------------------------------------------
     # 创建上下文（身份 + 运行环境）
@@ -283,36 +322,25 @@ class SystemPromptBuilder:
         role: agent_role.AgentRole,
         load_agents_md: bool,
     ) -> list[str]:
-        """取项目级全局知识段落（``AGENTS.md`` / ``INSTRUCTIONS.md``）。
-
-        ``agent_name`` 与 ``role`` 目前只作留痕（不同 agent 的知识块将来可能
-        分桶），是否加载由 ``load_agents_md`` + ``project_home`` 决定：开关没开、
-        或项目里根本没有这些文件时返回空列表。
-
-        全局知识是增强素材：读不到就整段不拼，绝不让一个缺省文件打断装配。
+        """重构：采用注入资源+四级分类（.rabbit->.app））
         """
-        if not load_agents_md or not project_home:
-            return []
-        try:
-            root = pathlib.Path(project_home)
-        except (TypeError, ValueError):
-            logger.debug("invalid project_home for global knowledge: %r", project_home)
+        if not load_agents_md :
             return []
 
-        sections: list[str] = []
-        for filename in ("AGENTS.md", "INSTRUCTIONS.md"):
-            for base in (root / ".rabbit", root):
-                path = base / filename
-                try:
-                    content = path.read_text(encoding="utf-8").strip()
-                except (OSError, UnicodeDecodeError):
-                    continue
-                if content:
-                    sections.append(
-                        f"# PROJECT KNOWLEDGE (from {filename})\n\n{content}"
-                    )
-                break
-        return sections
+        prompt_parts: typing.List[str] = []
+        use_knowledge = self._instruction_content(
+            {hook_inputs.InstructionMemoryType.USER}
+        )
+
+        if use_knowledge:
+            prompt_parts.append(f"# USER GLOBAL KNOWLEDGE\n\n {use_knowledge}")
+
+        #project/local/managed 级别(窄作用域)
+
+        project_knowledge= self._project_instruction_content(project_home)
+        if project_knowledge:
+            prompt_parts.append(f"#PROJECT GLOBAL  KNOWLEDGE\n\n {project_knowledge}")
+        return prompt_parts
 
     # ------------------------------------------------------------------
     # 内部辅助
@@ -358,6 +386,72 @@ class SystemPromptBuilder:
             if text:
                 sections.append(text)
         return sections
+
+    def _instruction_content(
+        self,
+        memory_types: typing.Optional[typing.Iterable[hook_inputs.InstructionMemoryType]]=None,
+    ) -> str:
+        """按作用域聚合指令资源的内容。
+
+        :param memory_types: 只取这些作用域的指令（如 ``{USER}``）；
+                             传 ``None`` 表示不限作用域。
+        :return: 聚合后的正文；无匹配资源时返回空串。
+
+        .. note::
+           本方法此前**只有调用点、没有定义**——``_build_global_knowledge_sections``
+           调到它时抛 ``AttributeError: 'SystemPromptBuilder' object has no
+           attribute '_instruction_content'``，于是每次构造系统提示词都在
+           「用户级全局知识」这一步崩掉，agent 回合直接失败。
+
+           素材来源就是构造时注入的 ``instruction_resources``：每条资源自带
+           ``memory_type``（User/Project/Local/Managed）与 ``content``。
+        """
+        wanted: set[object]|None = None
+        if memory_types is not None:
+            wanted = {str(getattr(item, "value", item)) for item in memory_types}
+        chunks: list[str] = []
+        for resource in self.instruction_resources or []:
+            if wanted is not None:
+                memory_type = getattr(resource, "memory_type", None)
+                if str(getattr(memory_type, "value", memory_type)) not in wanted:
+                    continue
+            text = _safe_str(getattr(resource, "content", ""))
+            if text:
+                chunks.append(text)
+        return "\n\n".join(chunks)
+
+    def _project_instruction_content(self, project_home: typing.Optional[str]) -> str:
+        """取项目级（``PROJECT`` 作用域）的指令内容。
+
+        ``project_home`` 参与筛选：``InstructionResource`` 里带
+        ``trigger_file_path`` / ``parent_file_path`` 的资源若不在该项目目录下，
+        不应被拼进系统提示词。
+        """
+        wanted = str(
+            getattr(hook_inputs.InstructionMemoryType.PROJECT, "value",
+                    hook_inputs.InstructionMemoryType.PROJECT)
+        )
+        chunks: list[str] = []
+        for resource in self.instruction_resources or []:
+            memory_type = getattr(resource, "memory_type", None)
+            if str(getattr(memory_type, "value", memory_type)) != wanted:
+                continue
+            if project_home:
+                path = _safe_str(getattr(resource, "file_path", ""))
+                if path:
+                    try:
+                        resolved = pathlib.Path(path).resolve()
+                        project_root = pathlib.Path(project_home).resolve()
+                    except (OSError, ValueError):
+                        resolved = None
+                        project_root = None
+                    if resolved is not None and project_root is not None:
+                        if not resolved.is_relative_to(project_root):
+                            continue
+            text = _safe_str(getattr(resource, "content", ""))
+            if text:
+                chunks.append(text)
+        return "\n\n".join(chunks)
 
     async def _optimize_prompt(self, prompt: str) -> str:
         """上下文优化（可选）。

@@ -20,6 +20,7 @@ agent 报废掉。所以拿不到就退化，而不是抛异常。
 from __future__ import annotations
 
 import collections.abc as cabc
+import typing
 import inspect
 import logging
 
@@ -172,6 +173,16 @@ class AgentInstanceManager:
         scheduler_resolver: runtime_ports.AgentSchedulerResolverProtocol|None=None,
         hook_agent_type: str|None=None,
         hook_agent_source_path:str|None=None,
+        # 以下为「6 个独立 agent 类降级为配置预设」后透传给 ReActAgent 的参数。
+        # 原先 ``runtime_composition._instantiate_agent`` 已经传了这些关键字，
+        # 但本方法签名里没有，会抛
+        # ``TypeError: create_agent_instance() got an unexpected keyword argument``。
+        tool_call_mode:str="native",
+        reflection_max_iterations:int=3,
+        reflection_prompts:dict[str,str]|None=None,
+        plan_prompts:dict[str,str]|None=None,
+        tool_call_listener:typing.Callable[[dict[str,typing.Any]],None]|None=None,
+        preset_type:str="react",
     )->ReActAgent:
        agent = ReActAgent(
            name=agent_name,
@@ -193,6 +204,12 @@ class AgentInstanceManager:
            scheduler_resolver=scheduler_resolver,
            hook_agent_type =hook_agent_type,
            hook_agent_source_path= hook_agent_source_path,
+           tool_call_mode=tool_call_mode,
+           reflection_max_iterations=reflection_max_iterations,
+           reflection_prompts=reflection_prompts,
+           plan_prompts=plan_prompts,
+           tool_call_listener=tool_call_listener,
+           preset_type=preset_type,
        )
        return agent
 

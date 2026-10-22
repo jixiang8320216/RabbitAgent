@@ -286,6 +286,31 @@ find domains interfaces shared -name "*.py" -size 0 -not -path "*__pycache__*"
 
 空壳模块要么补齐（按**调用契约**，不是凭名字猜），要么写明用途后保留，要么删除。
 
+### 5.5 架构约束检查（三条硬规则的可执行版本）
+
+```bash
+python tools/check_architecture.py              # 违规 -> 退出码 1
+python tools/check_architecture.py --json       # CI 消费
+python tools/check_architecture.py --baseline   # 只拦新增违规（存量先进基线）
+python tools/check_architecture.py --update-baseline
+```
+
+规则与文档一致：领域层不依赖上层/第三方 SDK、跨域不直接依赖对方 infrastructure、
+域层不依赖 `interfaces`。**当前代码库 0 违规**，可以直接挂进 CI。
+`tests/test_architecture_guard.py` 除了跑全量检查，还会插桩一条违规验证检查器
+真的会报错（避免它变成又一个「看着有、实际不生效」的装饰器）。
+
+### 5.6 跑 pytest
+
+```bash
+python -m pytest                    # 45 例
+python -m pytest tests/test_history_compression.py -q
+```
+
+异步用例统一写成同步函数 + `asyncio.run(...)`：依赖里没有 `pytest-asyncio`，
+不为写测试新增第三方插件。RAG 用例全部打桩（假 store + 假 embedding），
+不依赖 Qdrant 服务与嵌入模型。
+
 ### 5.4 按调用契约补空壳
 
 **不要凭名字猜该有什么。** 契约来自现存代码的调用点：
@@ -302,18 +327,32 @@ find domains interfaces shared -name "*.py" -size 0 -not -path "*__pycache__*"
 
 | # | 问题 | 影响 | 建议 |
 |---|---|---|---|
-| 1 | `domains/llm` 14 条坏映射 | `AzureProvider` / `OpenAICodexProvider` 访问即 `ModuleNotFoundError` | 补齐 provider 或移除映射 |
-| 2 | 历史消息自动压缩无执行者 | 有状态标记与 `compressionThreshold` 配置，但无「token 超阈值 → 压缩历史」的实现 | 补执行者 |
+| ~~1~~ ✅ 已修 | `domains/llm` 的 Azure / OpenAI Codex 坏映射 | 指向从未迁移的模块，访问即 `ModuleNotFoundError` | 4 条 llm 坏映射已摘除；**全项目坏映射已清零**（另有 `ToolRegistry` / `MemoryConfig` / `SessionMode` 等 11 条改指向真实定义，`reset_agent_invoke_count` 补齐实现） |
+| ~~2~~ ✅ 已修 | 历史消息自动压缩无执行者 | 有状态标记与 `compressionThreshold` 配置，但没有「超阈值就压」的实现 | 新增 `HistoryCompressionService`（不切工具调用序列、模型摘要失败降级规则式、压不动就不压），并在每轮调 LLM 前调用；`AgentCompressionState` 空壳已补齐 |
 | 3 | `domains/runtime` 命名歧义 | "runtime" 指编排运行时，与被解散的旧 `runtime/`（消息模型）同名不同义 | 改名 `orchestration` |
 | 4 | `domains/tool` 顶层散落 | `registry.py` `base.py` `chain.py` 未分三层 | 补齐域内分层 |
-| 5 | 无自动化测试套件 | 仅有 `e2e_tui_test.py`；`pytest` 已列依赖但无测试目录 | 建 `tests/` + pytest 配置 |
+| ~~5~~ ✅ 已修 | 无自动化测试套件 | 仅有 `e2e_tui_test.py` | 已建 `tests/` + `pytest.ini`，45 例覆盖三段式检索 / 8 种模式编排 / 历史压缩 / 架构守卫 |
 | 6 | `domains/permission` 文件双份 | `cli_strategy.py` / `interrupt_manager.py` 在根目录与 `infrastructure/` 下各一份 | 确认 canonical 后去重 |
 | 7 | `ReActAgent` 872 行 | 聚合根过大 | 按 `domains/agent` 的设计拆分 |
-| 8 | 三条依赖约束未落地 | 靠人工约定维持 | 引入 import-linter 并写进 CI |
-| 9 | `interfaces/commands/implementation/mcp_selector.py` | 0 字节空壳 | 补齐或删除 |
+| ~~8~~ ✅ 已修 | 三条依赖约束未落地 | 靠人工约定维持 | 新增 `tools/check_architecture.py`（零第三方依赖、可接 CI），当前 **0 违规**；发现并纠正了两处真实反向依赖（`AgentExecutionStore` 端口下沉到 `domain/ports`、`SessionMode`/`ModelInfo` 下沉到 `configuration.domain`） |
+| ~~9~~ ✅ 已删 | `interfaces/commands/implementation/mcp_selector.py` | 0 字节且**全项目零调用方** | 已删除：没有调用契约可依，补齐等于凭名字猜 API |
 | 12 | 44 个 0 字节空壳 | 集中在 `hook`（13）、`agent`（9）、`runtime`（8）、`plugin`（4）等域 | 按调用契约补齐，或写明用途后保留 |
-| 10 | `litellm` 未在 requirements 声明 | 计费能力静默降级 | 列入可选依赖 |
-| 11 | `billing` 域未接入主链路 | 已有 `BudgetTracker` 但无调用方喂数据 | 在 `TokenCounter` 侧接上 |
+| ~~10~~ ✅ 已修 | `litellm` 未在 requirements 声明 | 计费能力静默降级 | 已列入 `requirements.txt` 的「可选依赖」段（连同 `fastmcp` / `datasets` 一并写明降级语义） |
+| ~~11~~ ✅ 已修 | `billing` 域未接入主链路 | 已有 `BudgetTracker` 但无数据来源 | `TokenCounter` 新增 `BillingUsageSink` 协议并在每次真实用量时推送；billing 侧实现 `BudgetUsageSink`（`domains/billing/application/token_usage_bridge.py`），由 `ModelContextFactory` 按配置 `billing.enabled` 装配（默认关） |
+| ~~13~~ ✅ 已修 | **惰性导出名与子模块同名**（地雷） | `file_lock` / `project_layout` 既是导出名又是本包子模块名。子模块一旦被导入，CPython 把模块对象绑到父包同名属性上，而 `__getattr__` 只在属性查找**失败**时才触发 —— 惰性导出被永久遮蔽，**进程启动即崩**：`TypeError: 'module' object is not callable` | 实现文件改名 `file_lock_impl.py` / `project_layout_impl.py` 以消除同名（两种用法对同一名字的要求互斥，急切绑定会反过来弄坏 `import a.b.c as x`）；新增架构规则 4 拦截此类新增 |
+| ~~14~~ ✅ 已修 | **Qdrant 客户端 API 变更**（地雷） | `qdrant-client` 1.19 移除了 `client.search()`，代码无条件调用它，异常被 `except` 吞掉后返回空列表 —— **RAG 检索静默返回 0 条**：不报错、无外显日志、每次都是 0 条 | 按能力选择 `query_points()`（新版）/ `search()`（旧版），并把 swallow 处改为 `logger.exception` 留栈 |
+
+### 两条地雷的共同点
+
+都不是「功能没写」，而是**失败被吞掉**：一个被 CPython 的属性查找规则吞掉，一个被
+`except Exception: return []` 吞掉。静态看代码完全正常，只有跑到特定导入顺序 /
+特定依赖版本才炸。因此处理方式一致：
+
+- 用例按**触发顺序**构造场景（先导入子模块、再经包属性调用），否则复现不出来；
+- 规则进架构检查器（规则 4），新增即拦截；
+- swallow 处至少留栈，让下一次 API 变更不再无声。
+
+这两条的回归用例在 `tests/test_runtime_landmines.py`，**在修复前的代码上 6 项全红**。
 
 ---
 

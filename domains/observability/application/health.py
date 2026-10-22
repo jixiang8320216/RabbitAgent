@@ -86,13 +86,22 @@ class HealthMonitor:
     def status(self) -> health_domain.HealthStatus:
         """按当前状态给出整体健康结论。
 
-        队列溢出或端点不可达 → unhealthy；仅接近容量上限 → degraded。
+        队列溢出 / 端点不可达 / 采集端内部异常 → unhealthy；
+        仅接近容量上限 → degraded。
+
+        **采集端内部异常（INTERNAL_ERROR）必须计入降级依据**：
+        遥测链路自身的异常只存在于进程内，队列水位与端点可达性都是
+        「正常上报」时的产物——链路已经崩了，自然上报不出队列水位或
+        端点不可达。若不把 INTERNAL_ERROR 计入，监控面板会在遥测
+        链路自身故障时依然显示「健康」，异常被完全静默。
         """
         with self._lock:
             alerts = set(self._alerts)
         if health_domain.TelemetryAlertCategory.QUEUE_OVERFLOWED in alerts:
             return health_domain.HealthStatus.UNHEALTHY
         if health_domain.TelemetryAlertCategory.ENDPOINT_UNREACHABLE in alerts:
+            return health_domain.HealthStatus.UNHEALTHY
+        if health_domain.TelemetryAlertCategory.INTERNAL_ERROR in alerts:
             return health_domain.HealthStatus.UNHEALTHY
         if health_domain.TelemetryAlertCategory.QUEUE_NEAR_CAPACITY in alerts:
             return health_domain.HealthStatus.DEGRADED

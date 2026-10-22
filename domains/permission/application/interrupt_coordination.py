@@ -45,6 +45,8 @@ class InterruptManager:
     _turn_scopes: dict[str, typing.Any] = {}
     # 会话 -> 会话级作用域（本会话所有轮次的父作用域）
     _session_scopes: dict[str, typing.Any] = {}
+    # (会话, 后台 agent id) -> 后台执行作用域
+    _background_scopes: dict[tuple[str, str], typing.Any] = {}
     # 会话 -> 本会话已完成的轮次数（仅用于诊断/日志）
     _turn_counts: dict[str, int] = {}
 
@@ -179,6 +181,78 @@ class InterruptManager:
         with cls._lock:
             return tuple(cls._turn_scopes.keys())
 
+    # --- 后台执行作用域 ---
+    #
+    # 后台 agent（spawn 出去的子任务）不属于某一轮对话：主 turn 结束后它仍可能
+    # 继续跑，因此需要独立于 turn 作用域的登记簿，才能做到
+    # 「按 agent id 单独取消」而不误杀同会话的其他任务。
+
+    @classmethod
+    def register_background_scope(
+        cls, session_id: str | None, agent_id: str, scope: typing.Any
+    ) -> typing.Any:
+        """登记某会话下某后台 agent 的执行作用域。
+
+        :return: 登记后的作用域（便于链式使用）。
+        """
+        key = _session_key(session_id)
+        if key is None:
+            return scope
+        with cls._lock:
+            cls._background_scopes[(key, str(agent_id))] = scope
+        return scope
+
+    @classmethod
+    def get_background_scope(
+        cls, session_id: str | None, agent_id: str
+    ) -> typing.Any | None:
+        """取某后台 agent 的执行作用域；未登记返回 None。"""
+        key = _session_key(session_id)
+        if key is None:
+            return None
+        with cls._lock:
+            return cls._background_scopes.get((key, str(agent_id)))
+
+    @classmethod
+    def unregister_background_scope(
+        cls, session_id: str | None, agent_id: str
+    ) -> bool:
+        """注销某后台 agent 的执行作用域。
+
+        :return: 确实注销掉了一条记录返回 True；本来就没有返回 False。
+        """
+        key = _session_key(session_id)
+        if key is None:
+            return False
+        with cls._lock:
+            return cls._background_scopes.pop((key, str(agent_id)), None) is not None
+
+    @classmethod
+    def background_scope_ids(cls, session_id: str | None) -> tuple[str, ...]:
+        """列出某会话下已登记的后台 agent 标识。"""
+        key = _session_key(session_id)
+        if key is None:
+            return ()
+        with cls._lock:
+            return tuple(
+                agent_id
+                for (session, agent_id) in cls._background_scopes
+                if session == key
+            )
+
+    @classmethod
+    def cancel_background_scope(
+        cls, session_id: str | None, agent_id: str, reason: str = "user_cancelled"
+    ) -> bool:
+        """取消某后台 agent 的执行作用域。
+
+        :return: 确实取消掉了一个运行中的后台任务返回 True。
+        """
+        scope = cls.get_background_scope(session_id, agent_id)
+        if scope is None:
+            return False
+        return bool(scope.cancel(reason))
+
     @classmethod
     def turn_count(cls, session_id: str | None) -> int:
         """返回某会话累计的轮次数；未知会话返回 0。"""
@@ -195,6 +269,7 @@ class InterruptManager:
             cls._interrupt_flags.clear()
             cls._turn_scopes.clear()
             cls._session_scopes.clear()
+            cls._background_scopes.clear()
             cls._turn_counts.clear()
 
 

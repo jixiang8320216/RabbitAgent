@@ -11,7 +11,8 @@ import domains.agent.application.context.context_optimizer_adapter as agent_cont
 import domains.memory.application.memory_runtime_service as memory_runtime_service
 import typing
 import asyncio
-import collections.abc as abc
+import collections.abc
+import pydantic
 import domains.agent.domain.entities.agent_runtime as agent_runtime_module
 import domains.agent.domain.aggregates.react_agent as agent_module
 import domains.agent.application.hook.runtime_hook_builder as hook_builder_module
@@ -19,6 +20,8 @@ import domains.observability.domain.rabbit_observer as base_observer_module
 import domains.llm.provider.application.context.context_window_resolver as context_window_resolver
 import domains.agent.domain.entities.agent_role as agent_role_module
 import domains.memory.application.memory_agent_tools as memory_agent_tools
+import domains.memory.application.rag_agent_tools as rag_agent_tools
+import domains.configuration.infrastructure.merge.rag_config_rules as rag_config_rules
 import domains.tool.core.application.toolkit as toolkit_module
 import domains.agent.domain.value_objects.runtime_context as process_runtime_context
 import domains.plugin.application.request_context as plugin_context
@@ -52,7 +55,7 @@ class AgentRuntimeCompositionHost(typing.Protocol):
         agent_context:agent_context_module.AgentContext|None,
     )->agent_scheduler.AgentScheduler |None:...
 
-    def bing_agent_identity(self
+    def bind_agent_identity(self
         ,
         agent_id:str,
         agent_spec: agent_runtime_spec.AgentRuntimeSpec,
@@ -76,15 +79,21 @@ class AgentRuntimeApplicationPort(
     memory_runtime: memory_runtime_service.MemoryRuntimeService|None
 
 
-# ``AgentFactory.create_react_agent`` 里 cast 用的是这个别名，保留原名以免调用方改动。
-AgentRuntimeCompositionHost = AgentRuntimeApplicationPort
-
-
-@dataclasses.dataclass(frozen=True)
-class AgentRuntimeOptions:
+class AgentRuntimeOptions(pydantic.BaseModel):
     """装配一个 agent 时用到的开关集合。
 
     取值优先级：sub_agent 声明 > 宿主/应用全局配置 > 内置默认值。
+
+    .. note::
+       本类此前被误加了 ``@dataclasses.dataclass(frozen=True)``。dataclass 会用
+       自己生成的 ``__init__`` **覆盖** pydantic 的 ``__init__``，而 dataclass 的
+       字段语义是「无默认值 = 必填」——于是连 ``enable_meta_tool`` /
+       ``mode_id`` / ``model_profile_id`` 这三个**明明有默认值**的字段也变成必填，
+       ``_options()`` 只传 6 个参数 → 启动即抛
+       ``TypeError: AgentRuntimeOptions.__init__() missing 3 required positional
+       arguments: 'enable_meta_tool', 'mode_id', and 'model_profile_id'``。
+
+       pydantic 模型自带构造与校验，不需要 dataclass 装饰，此处移除。
     """
 
     include_builtin_tools: bool = True
@@ -101,7 +110,12 @@ class AgentRuntimeOptions:
 
     @property
     def sytem_prompt_file(self) -> str:
-        """历史拼写（缺一个 s）的兼容别名，指向 ``system_prompt_file``。"""
+        """历史拼写（缺一个 s）的兼容别名，指向 ``system_prompt_file``。
+
+        注意别名是 ``sytem_prompt_file``（缺一个 s）。此前这里误写成了
+        ``system_prompt_file``——与同名字段重名，property 覆盖字段后
+        ``self.system_prompt_file`` 会无限递归，读取即 ``RecursionError``。
+        """
         return self.system_prompt_file
 
 
@@ -128,7 +142,7 @@ async def create_react_agent(
     host:AgentRuntimeApplicationPort,
     sub_agent:agent_runtime_module.AgentRuntime,
     *,
-    react_agent_factory:abc.Callable[...,agent_module.ReActAgent],
+    react_agent_factory:collections.abc.Callable[...,agent_module.ReActAgent],
     override_name:str|None=None,
     hook_builder: hook_builder_module.AgentRuntimeHookBuilder|None=None,
     observer:base_observer_module.RabbitObserver|None=None,
@@ -163,6 +177,7 @@ async def create_react_agent(
     host._token_counter = host._model_context_factory.get_token_counter()
     agent_role=agent_role_module.AgentRole.resolve(sub_agent.agent_role,sub_agent.agent_slot)
     memory_runtime = _attach_memory_tools(host,toolkit,agent_role,sub_agent)
+    _attach_rag_tools(host,toolkit)
     formatter = host._model_context_factory.create_formatter(
         llm_config= effective_llm_config,
         agent_name=override_name or sub_agent.name,
@@ -410,6 +425,36 @@ def _attach_memory_tools(
         )
         runtime= memory_runtime_service.MemoryRuntimeService(expert_settings)
     memory_agent_tools.register_memory_tools(toolkit, runtime)
+
+
+def _attach_rag_tools(
+    host: AgentRuntimeApplicationPort,
+    toolkit: toolkit_module.Toolkit,
+) -> typing.Any | None:
+    """把 RAG 工具挂进工具集。
+
+    与记忆工具分开处理，因为二者依赖的外部条件不同：
+
+    - 记忆（Markdown 文档轨）只需要本地文件系统，默认可用；
+    - RAG 需要外部 Qdrant 服务，因此**默认关闭**，由配置显式开启
+      （``personalization.rag.enabled``）。
+
+    开关与运行参数取自分层合并后的配置快照
+    （``app_instance.config.runtime_config_snapshot``）；取不到配置时按
+    「未启用」处理——宁可少一个工具，也不要在无 Qdrant 的环境里注册一个
+    必然失败的工具让模型反复试错。
+    """
+    if host.app_instance is None:
+        return None
+    config = getattr(host.app_instance, "config", None)
+    snapshot = getattr(config, "runtime_config_snapshot", None)
+    if not isinstance(snapshot, typing.Mapping):  # type: ignore[arg-type]
+        return None
+    settings = rag_config_rules.resolve_rag_settings(snapshot)
+    if not settings.get("enabled"):
+        return None
+    return rag_agent_tools.register_rag_tools(toolkit, settings)
+
     return runtime
 
 def should_attach_memory(
@@ -579,7 +624,7 @@ def _scheduler_resolver(
 def _instantiate_agent(
     host: AgentRuntimeApplicationPort,
     *,
-    react_agent_factory: abc.Callable[..., agent_module.ReActAgent],
+    react_agent_factory: collections.abc.Callable[..., agent_module.ReActAgent],
     sub_agent: agent_runtime_module.AgentRuntime,
     options: AgentRuntimeOptions,
     agent_name: str,
@@ -598,6 +643,12 @@ def _instantiate_agent(
    scheduler_resolver = _scheduler_resolver(host, diagnostic_context)
    hook_agent_source_path =str(sub_agent.source_path) if sub_agent.source_path is not None else None
    hook_agent_type= sub_agent.name if hook_agent_source_path is not None else None
+
+   tool_call_listener=None
+   if sub_agent.tool_call_listener_id:
+       tool_call_listener = host.tool_call_listener(
+           sub_agent.tool_call_listener_id,
+       )
    if plan_runtime is not None:
        return react_agent_factory(
            name=agent_name,
@@ -619,6 +670,18 @@ def _instantiate_agent(
    scheduler_resolver=scheduler_resolver,
    hook_agent_type=hook_agent_type,
    hook_agent_source_path=hook_agent_source_path,
+           # ``tool_call_mode`` —— 原拼写 ``tool_callmode`` 与
+           # ``ReActAgent.__init__`` 的关键字不一致，会直接 TypeError；
+           # 这里是「工具调用走 native 还是文本解析」的唯一开关。
+           tool_call_mode = sub_agent.tool_call_mode,
+           # ``preset_type`` —— 6 个独立 agent 类降级后的配置预设值，
+           # 决定 ReActAgent 内部走哪条回复策略（见 _reply_impl）。
+           preset_type = sub_agent.preset_type,
+           reflection_max_iterations = sub_agent.reflection_max_iterations,
+           reflection_prompts = sub_agent.reflection_prompts,
+           plan_prompts = sub_agent.plan_prompts,
+           tool_call_listener=tool_call_listener,
+           enable_meta_tool=sub_agent.enable_meta_tool,
    )
    return host._agent_instance_manager.create_agent_instance(
        agent_name=agent_name,
@@ -647,6 +710,12 @@ def _instantiate_agent(
        scheduler_resolver=scheduler_resolver,
        hook_agent_type=hook_agent_type,
        hook_agent_source_path=hook_agent_source_path,
+       tool_call_mode=sub_agent.tool_call_mode,
+       preset_type=sub_agent.preset_type,
+       reflection_max_iterations=sub_agent.reflection_max_iterations,
+       reflection_prompts=sub_agent.reflection_prompts,
+       plan_prompts=sub_agent.plan_prompts,
+       tool_call_listener=tool_call_listener,
    )
 
 
@@ -841,7 +910,7 @@ def _invoke_optional(
     return method(*args, **kwargs)
 
 
-def _invoke_with_supported_kwargs(fn: abc.Callable[..., typing.Any], **candidates: object) -> object:
+def _invoke_with_supported_kwargs(fn: collections.abc.Callable[..., typing.Any], **candidates: object) -> object:
     """按 ``fn`` 真实接受的形参挑参数后调用。
 
     各模块的实现还在演进，调用点无法保证参数名始终一致；这里只传它能接的。
@@ -858,7 +927,7 @@ def _invoke_with_supported_kwargs(fn: abc.Callable[..., typing.Any], **candidate
     return fn(**supported)
 
 
-def _accepted_parameters(factory: abc.Callable[..., typing.Any]) -> set[str] | None:
+def _accepted_parameters(factory: collections.abc.Callable[..., typing.Any]) -> set[str] | None:
     """取工厂（类或其 ``__init__``）能接受的形参名集合。
 
     ``inspect.signature`` 在 ReActAgent 上会因注解求值失败（runtime_ports 里
@@ -906,7 +975,7 @@ def _collect_tools(source: typing.Any | None) -> list[typing.Any]:
 
 def _tool_name(tool: typing.Any) -> str | None:
     """取工具名，兼容 ``tool.name`` / ``tool.tool_name`` / 字典形态。"""
-    if isinstance(tool, abc.Mapping):
+    if isinstance(tool, collections.abc.Mapping):
         name = tool.get("name")
         return str(name) if name is not None else None
     for attr in ("name", "tool_name", "__name__"):
@@ -1108,14 +1177,14 @@ def _attach_hooks(
     if not hooks:
         return
 
-    if isinstance(hooks, abc.Mapping):
+    if isinstance(hooks, collections.abc.Mapping):
         for hook_type, bucket in hooks.items():
-            if isinstance(bucket, abc.Mapping):
+            if isinstance(bucket, collections.abc.Mapping):
                 for hook_name, callback in bucket.items():
                     _register_hook(agent, hook_type, hook_name, callback)
             elif callable(bucket):
                 _register_hook(agent, hook_type, str(hook_type), bucket)
-    elif isinstance(hooks, abc.Sequence):
+    elif isinstance(hooks, collections.abc.Sequence):
         for index, callback in enumerate(hooks):
             if callable(callback):
                 _register_hook(agent, "pre_rabbit", f"hook_{index}", callback)
@@ -1138,14 +1207,14 @@ def _extract_tool_schema_names(schemas: object) -> list[str]:
             if item:
                 names.append(item)
             continue
-        if not isinstance(item, abc.Mapping):
+        if not isinstance(item, collections.abc.Mapping):
             item = getattr(item, "__dict__", None)
-            if not isinstance(item, abc.Mapping):
+            if not isinstance(item, collections.abc.Mapping):
                 continue
         name = item.get("name")
         if not isinstance(name, str) or not name:
             nested = item.get("function")
-            if isinstance(nested, abc.Mapping):
+            if isinstance(nested, collections.abc.Mapping):
                 name = nested.get("name")
         if isinstance(name, str) and name:
             names.append(name)
@@ -1156,7 +1225,7 @@ def _register_hook(
     agent: agent_module.ReActAgent,
     hook_type: str,
     hook_name: str,
-    callback: abc.Callable[..., typing.Any],
+    callback: collections.abc.Callable[..., typing.Any],
 ) -> None:
     """注册单个 hook：优先用 agent 的公开方法，没有就直接写 ``_hooks``。"""
     register = getattr(agent, "register_hook", None)

@@ -29,11 +29,7 @@ _LAZY = {
     "Message": "domains.agent.domain.value_objects.message",
     "AgentsException": "shared.exceptions",
     # Agent 实现
-    "SimpleAgent": "domains.agent.domain.aggregates.simple_agent",
     "ReActAgent": "domains.agent.domain.react_agent",
-    "ReflectionAgent": "domains.agent.domain.aggregates.reflection_agent",
-    "PlanAndSolveAgent": "domains.agent.domain.aggregates.plan_solve_agent",
-    "ToolAwareSimpleAgent": "domains.agent.domain.aggregates.tool_aware_agent",
     # 工具系统
     "ToolRegistry": "domains.tool.infrastructure.registry",
     "global_registry": "domains.tool.infrastructure.registry",
@@ -77,11 +73,7 @@ __all__ = [
     "AgentsException",
 
     # Agent范式
-    "SimpleAgent",
     "ReActAgent",
-    "ReflectionAgent",
-    "PlanAndSolveAgent",
-    "ToolAwareSimpleAgent",
 
     # 工具系统
     "ToolRegistry",

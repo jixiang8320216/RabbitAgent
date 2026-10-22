@@ -6,6 +6,7 @@ import domains.llm.provider.composition as provider_composition
 import domains.agent.domain.aggregates.chat_model as chart_model
 import domains.agent.domain.entities.agent_runtime as agent_runtime_module
 import domains.agent.domain.aggregates.message_formatter as message_formatter
+import domains.billing.domain.litellm_budget as budget_module
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +35,59 @@ class ModelContextFactory:
         *,
         configmanager: FormatterConfigurationSource |None = None,
         token_counter: token_counter_module.TokenCounter|None = None,
+        attach_billing: bool | None = None,
     ) -> None:
         self.configmanager = configmanager
         self.token_counter = token_counter if token_counter is not None else token_counter_module.TokenCounter()
+        #: 预算跟踪器；仅在计费开启时存在（billing 域此前没有数据来源）
+        self.budget_tracker: budget_module.BudgetTracker | None = None
+        if attach_billing is None:
+            attach_billing = self._billing_enabled(configmanager)
+        if attach_billing:
+            self._attach_billing_sink()
+
+    # -- 计费桥 ---------------------------------------------------------
+
+    @staticmethod
+    def _billing_enabled(configmanager: object | None) -> bool:
+        """读取计费开关：配置优先，其次环境变量，默认**关闭**。
+
+        为什么默认关：计费需要 LiteLLM 定价表（未安装时 ``estimate_cost`` 返回
+        ``None``），开着只是白记一堆空记录。要开就在配置里显式开。
+        """
+        getter = getattr(configmanager, "get_property", None)
+        if callable(getter):
+            try:
+                configured = getter("billing.enabled", None)
+                if isinstance(configured, bool):
+                    return configured
+                if isinstance(configured, str):
+                    return configured.strip().lower() in {"1", "true", "yes", "on"}
+            except Exception:  # noqa: BLE001 - 配置读取失败按默认处理
+                pass
+        import os
+
+        return os.getenv("RABBIT_BILLING_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _attach_billing_sink(self) -> None:
+        """把 ``BudgetTracker`` 接到 token 计数器上。"""
+        import domains.billing.application.token_usage_bridge as bridge_module
+
+        try:
+            limit_raw = None
+            getter = getattr(self.configmanager, "get_property", None)
+            if callable(getter):
+                limit_raw = getter("billing.limit_usd", None)
+            limit_usd = None
+            if isinstance(limit_raw, (int, float)) and not isinstance(limit_raw, bool) and limit_raw > 0:
+                limit_usd = float(limit_raw)
+            self.budget_tracker = budget_module.BudgetTracker(limit_usd=limit_usd)
+            self.token_counter.register_billing_sink(
+                bridge_module.BudgetUsageSink(self.budget_tracker)
+            )
+        except Exception as exc:  # noqa: BLE001 - 计费装配失败不该影响启动
+            self.budget_tracker = None
+            logger.debug("billing bridge not attached: %s", exc)
 
     def get_token_counter(self) -> token_counter_module.TokenCounter:
         return self.token_counter

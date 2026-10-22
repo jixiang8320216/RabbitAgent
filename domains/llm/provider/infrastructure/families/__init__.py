@@ -11,6 +11,10 @@
 """
 
 # 惰性导出映射：导出名 -> 定义所在模块
+# 注：Azure OpenAI / OpenAI Codex 的 provider 与 provider_configuration 此前被登记在
+# 本表里，但目标模块（``...azure_openai...`` / ``...openai_codex...``）从未迁移过来：
+# 这是一张「声明了实现、访问才报错」的坏映射。与其继续留着一颗雷，不如显式摘除——
+# 真正需要这两个 provider 时应当按 openai_compatible 同族的形态**实现后**再登记。
 _LAZY = {
     "AnthropicBetaPort": "domains.llm.provider.infrastructure.families.anthropic.request_contracts",
     "AnthropicClientPort": "domains.llm.provider.infrastructure.families.anthropic.request_contracts",
@@ -19,7 +23,6 @@ _LAZY = {
     "AnthropicRequestExecutor": "domains.llm.provider.infrastructure.families.anthropic.request",
     "AnthropicRequestModel": "domains.llm.provider.infrastructure.families.anthropic.request_contracts",
     "AnthropicStreamResponse": "domains.llm.provider.infrastructure.families.anthropic.stream",
-    "AzureProvider": "domains.llm.provider.infrastructure.families.azure_openai.provider",
     "CustomProvider": "domains.llm.provider.infrastructure.families.openai_compatible.legacy_custom_provider",
     "DEFAULT_PROVIDER_ID": "domains.llm.provider.infrastructure.families.openai_compatible.module",
     "DEFAULT_SYSTEM_SEPARATOR": "domains.llm.provider.infrastructure.families.anthropic.messages",
@@ -27,7 +30,6 @@ _LAZY = {
     "MAX_CACHE_BREAKPOINTS": "domains.llm.provider.infrastructure.families.anthropic.messages",
     "MODULE": "domains.llm.provider.infrastructure.families.anthropic._types",
     "NativeAnthropicChatModel": "domains.llm.provider.infrastructure.families.anthropic.chat_model",
-    "OpenAICodexProvider": "domains.llm.provider.infrastructure.families.openai_codex.provider",
     "OpenAIProvider": "domains.llm.provider.infrastructure.families.openai_compatible.provider",
     "ResponseGenerator": "domains.llm.provider.infrastructure.families.anthropic.request_contracts",
     "StopReasonMap": "domains.llm.provider.infrastructure.families.anthropic.response",

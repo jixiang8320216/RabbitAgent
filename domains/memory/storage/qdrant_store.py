@@ -391,16 +391,35 @@ class QdrantVectorStore:
                 search_params = models.SearchParams(hnsw_ef=self.search_ef, exact=self.search_exact)
             except Exception:
                 search_params = None
-            search_result = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector,
-                query_filter=query_filter,
-                limit=limit,
-                score_threshold=score_threshold,
-                with_payload=True,
-                with_vectors=False,
-                search_params=search_params
-            )
+            # qdrant-client >= 1.12 用 ``query_points`` 取代 ``search``，1.19 起
+            # ``search`` 被彻底移除。此前这里无条件调 ``search``，在新版本上会抛
+            # AttributeError——而下面的 except 会把异常吞掉并返回空列表，于是
+            # 「RAG 检索不到任何东西」表现为**静默失效**（无报错、无日志外显、
+            # 每次都返回 0 条）。因此这里按能力选择 API，并保留对旧版的兼容。
+            if hasattr(self.client, "query_points"):
+                response = self.client.query_points(
+                    collection_name=self.collection_name,
+                    query=query_vector,
+                    query_filter=query_filter,
+                    limit=limit,
+                    score_threshold=score_threshold,
+                    with_payload=True,
+                    with_vectors=False,
+                    search_params=search_params,
+                )
+                # 新版返回 QueryResponse，命中列表在 .points 上
+                search_result = getattr(response, "points", response)
+            else:
+                search_result = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    query_filter=query_filter,
+                    limit=limit,
+                    score_threshold=score_threshold,
+                    with_payload=True,
+                    with_vectors=False,
+                    search_params=search_params
+                )
 
             # 转换结果格式
             results = []
@@ -416,7 +435,9 @@ class QdrantVectorStore:
             return results
 
         except Exception as e:
-            logger.error(f"❌ 向量搜索失败: {e}")
+            # 用 exception 而不是 error：这一层吞掉异常后对外只表现为「0 条结果」，
+            # 正是这个 swallow 让 client API 变更长期无人察觉。至少把栈留在日志里。
+            logger.exception(f"❌ 向量搜索失败: {e}")
             return []
 
     def delete_vectors(self, ids: List[str]) -> bool:
@@ -493,6 +514,59 @@ class QdrantVectorStore:
             logger.error(f"❌ 删除记忆失败: {e}")
             raise
 
+    def get_by_memory_id(self, memory_id: str) -> List[Dict[str, Any]]:
+        """按 payload 中的 ``memory_id`` 取回记忆记录（含 payload）。
+
+        与 :meth:`has_memory` 同一套定位方式，但返回完整 payload，
+        供上层在本地缓存缺失时回填记忆内容。
+        """
+        if not memory_id:
+            return []
+        try:
+            points, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=models.Filter(
+                    must=[FieldCondition(key="memory_id", match=MatchValue(value=memory_id))]
+                ),
+                limit=1,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as e:
+            logger.debug(f"❌ 按 memory_id 取记录失败: {e}")
+            return []
+        out: List[Dict[str, Any]] = []
+        for point in points or []:
+            payload = point.payload or {}
+            record = dict(payload)
+            record.setdefault("id", point.id)
+            out.append(record)
+        return out
+
+    def has_memory(self, memory_id: str) -> bool:
+        """按 payload 中的 ``memory_id`` 判断某条记忆是否已入库。
+
+        不能用 ``search_similar``（它需要查询向量），也不能按点 id 取
+        ——写入时点 id 可能是随机生成的 UUID，与 ``memory_id`` 不一致。
+        这里用 ``scroll`` + payload 过滤精确查找。
+        """
+        if not memory_id:
+            return False
+        try:
+            points, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=models.Filter(
+                    must=[FieldCondition(key="memory_id", match=MatchValue(value=memory_id))]
+                ),
+                limit=1,
+                with_payload=False,
+                with_vectors=False,
+            )
+            return bool(points)
+        except Exception as e:
+            logger.debug(f"❌ 记忆存在性检查失败: {e}")
+            return False
+
     def get_collection_info(self) -> Dict[str, Any]:
         """
         获取集合信息
@@ -503,12 +577,20 @@ class QdrantVectorStore:
         try:
             collection_info = self.client.get_collection(self.collection_name)
 
+            # ``vectors_count`` / ``indexed_vectors_count`` 在较新的 qdrant-client
+            # 里已被移除（改名且语义调整），直接取会抛 AttributeError 并让整个
+            # 统计接口返回空 dict。这里用 getattr 兜底。
+            points_count = getattr(collection_info, "points_count", None)
+            if points_count is None:
+                points_count = getattr(collection_info, "vectors_count", 0)
+
             info = {
                 "name": self.collection_name,
-                "vectors_count": collection_info.vectors_count,
-                "indexed_vectors_count": collection_info.indexed_vectors_count,
-                "points_count": collection_info.points_count,
-                "segments_count": collection_info.segments_count,
+                "points_count": points_count,
+                "vectors_count": points_count,
+                "indexed_vectors_count": getattr(
+                    collection_info, "indexed_vectors_count", None),
+                "segments_count": getattr(collection_info, "segments_count", None),
                 "config": {
                     "vector_size": self.vector_size,
                     "distance": self.distance.value,

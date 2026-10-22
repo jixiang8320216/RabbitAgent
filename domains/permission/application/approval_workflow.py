@@ -52,7 +52,7 @@ class ApprovalWorkflow:
         self,
         approval_repository: ports.ApprovalRepository,
         confirmation_gateway: ports.ConfirmationGateway,
-        plugin_policy: ports.AuthorizationPolicyPlugib,
+        plugin_policy: ports.AuthorizationPolicyPlugin,
         hook_gateway: ports.AuthorizationHookGateway | None = None,
     ) -> None:
         self._approval_repository = approval_repository
@@ -71,7 +71,7 @@ class ApprovalWorkflow:
         return self._confirmation_gateway
 
     @property
-    def plugin_policy(self) -> ports.AuthorizationPolicyPlugib:
+    def plugin_policy(self) -> ports.AuthorizationPolicyPlugin:
         """插件策略。"""
         return self._plugin_policy
 

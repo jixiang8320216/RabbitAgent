@@ -1,5 +1,6 @@
 
 import typing
+import collections.abc
 
 import domains.agent.domain.aggregates.react_agent as react_agent_module
 import domains.agent.domain.value_objects.message as message_module
@@ -50,3 +51,18 @@ class TurnExecutionOwner(typing.Protocol):
         *,
         model_index: int|None,
     )->message_module.Msg:...
+
+
+# ── 运行期回调类型别名 ─────────────────────────────────────────────
+# 这些回调由宿主在装配时注入；此处给出与调用点一致的别名，避免 import 期
+# AttributeError（``session_turn_execution`` 在方法签名里引用它们）。
+TurnAdmissionCallback = collections.abc.Callable[..., typing.Any]
+ContextPersistenceCallback = collections.abc.Callable[..., typing.Any]
+InputOffloadCallback = collections.abc.Callable[..., typing.Any]
+PreparedUserMessageCallback = collections.abc.Callable[..., typing.Any]
+# 调用点沿用了 ``Perpared`` 拼写，这里同时导出两个名字避免任一处 AttributeError。
+PerparedUserMessageCallback = PreparedUserMessageCallback
+
+
+class TurnContextPersistenceCallbackError(RuntimeError):
+    """上下文持久化回调执行失败时抛出（与 ``TurnContextPersistenceIndeterminateError`` 区分）。"""
